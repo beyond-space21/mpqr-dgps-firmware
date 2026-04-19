@@ -1,0 +1,3 @@
+[submodule "components/bno055"]
+	path = components/bno055
+	url = https://github.com/adithya-187326/bno055.git

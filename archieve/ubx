@@ -1,0 +1,184 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "rtk_task.h"
+#include "config.h"
+#include "esp_log.h"
+#include "driver/uart.h"
+#include <inttypes.h>
+#include <string.h>
+
+static const char *TAG = "rtk_task";
+
+static void ubx_ck_update(uint8_t b, uint8_t *ck_a, uint8_t *ck_b)
+{
+    *ck_a = (uint8_t)(*ck_a + b);
+    *ck_b = (uint8_t)(*ck_b + *ck_a);
+}
+
+typedef enum {
+    UBX_SYNC1,
+    UBX_SYNC2,
+    UBX_CLASS,
+    UBX_ID,
+    UBX_LEN1,
+    UBX_LEN2,
+    UBX_PAYLOAD,
+    UBX_CK_A,
+    UBX_CK_B,
+} ubx_state_t;
+
+void rtk_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    uart_config_t cfg = {
+        .baud_rate = CFG_RTK_UART_BAUD,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+
+    if (uart_driver_install(CFG_RTK_UART_NUM, 2048, 0, 0, NULL, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "UART install failed");
+    } else if (uart_param_config(CFG_RTK_UART_NUM, &cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "UART config failed");
+    } else if (uart_set_pin(CFG_RTK_UART_NUM, CFG_RTK_UART_TX_GPIO, CFG_RTK_UART_RX_GPIO,
+                            UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) != ESP_OK) {
+        ESP_LOGE(TAG, "UART set_pin failed");
+    } else {
+        ESP_LOGI(TAG, "RTK UART on TX=%d RX=%d baud=%d", CFG_RTK_UART_TX_GPIO, CFG_RTK_UART_RX_GPIO,
+                 CFG_RTK_UART_BAUD);
+    }
+
+    ESP_LOGI(TAG, "UBX summary enabled (sync B5 62)");
+
+    ubx_state_t st = UBX_SYNC1;
+    uint8_t cls = 0, id = 0;
+    uint16_t len = 0;
+    uint16_t payload_read = 0;
+    uint8_t ck_a = 0, ck_b = 0;
+    uint8_t rx_ck_a = 0, rx_ck_b = 0;
+    uint32_t packets_ok = 0, packets_bad = 0;
+
+    bool nmea_active = false;
+    size_t nmea_len = 0;
+    char nmea_line[160];
+
+    uint8_t buf[256];
+    while (1) {
+        int n = uart_read_bytes(CFG_RTK_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(500));
+        if (n > 0) {
+            for (int i = 0; i < n; i++) {
+                uint8_t b = buf[i];
+
+                /* If the RTK module also outputs NMEA, capture full lines and print them. */
+                if (!nmea_active && (b == '$' || b == '!')) {
+                    nmea_active = true;
+                    nmea_len = 0;
+                }
+
+                if (nmea_active) {
+                    if (nmea_len + 1 < sizeof(nmea_line)) {
+                        nmea_line[nmea_len++] = (char)b;
+                    } else {
+                        /* Line too long; drop it. */
+                        nmea_active = false;
+                        nmea_len = 0;
+                    }
+
+                    if (b == '\n') {
+                        /* Null-terminate and strip trailing CRLF for cleaner logs. */
+                        nmea_line[nmea_len] = '\0';
+                        while (nmea_len > 0 && (nmea_line[nmea_len - 1] == '\n' || nmea_line[nmea_len - 1] == '\r')) {
+                            nmea_line[nmea_len - 1] = '\0';
+                            nmea_len--;
+                        }
+                        if (nmea_len > 0) {
+                            ESP_LOGI(TAG, "NMEA %s", nmea_line);
+                        }
+                        nmea_active = false;
+                        nmea_len = 0;
+                    }
+
+                    continue;
+                }
+
+                switch (st) {
+                case UBX_SYNC1:
+                    if (b == 0xB5) {
+                        st = UBX_SYNC2;
+                    }
+                    break;
+                case UBX_SYNC2:
+                    if (b == 0x62) {
+                        ck_a = 0;
+                        ck_b = 0;
+                        cls = 0;
+                        id = 0;
+                        len = 0;
+                        payload_read = 0;
+                        st = UBX_CLASS;
+                    } else if (b == 0xB5) {
+                        /* stay in sync hunt */
+                        st = UBX_SYNC2;
+                    } else {
+                        st = UBX_SYNC1;
+                    }
+                    break;
+                case UBX_CLASS:
+                    cls = b;
+                    ubx_ck_update(b, &ck_a, &ck_b);
+                    st = UBX_ID;
+                    break;
+                case UBX_ID:
+                    id = b;
+                    ubx_ck_update(b, &ck_a, &ck_b);
+                    st = UBX_LEN1;
+                    break;
+                case UBX_LEN1:
+                    len = (uint16_t)b;
+                    ubx_ck_update(b, &ck_a, &ck_b);
+                    st = UBX_LEN2;
+                    break;
+                case UBX_LEN2:
+                    len |= (uint16_t)b << 8;
+                    ubx_ck_update(b, &ck_a, &ck_b);
+                    payload_read = 0;
+                    st = (len == 0) ? UBX_CK_A : UBX_PAYLOAD;
+                    break;
+                case UBX_PAYLOAD:
+                    ubx_ck_update(b, &ck_a, &ck_b);
+                    payload_read++;
+                    if (payload_read >= len) {
+                        st = UBX_CK_A;
+                    }
+                    break;
+                case UBX_CK_A:
+                    rx_ck_a = b;
+                    st = UBX_CK_B;
+                    break;
+                case UBX_CK_B:
+                    rx_ck_b = b;
+                    if (rx_ck_a == ck_a && rx_ck_b == ck_b) {
+                        packets_ok++;
+                        ESP_LOGI(TAG, "UBX cls=0x%02X id=0x%02X len=%u ok (%" PRIu32 " ok / %" PRIu32 " bad)",
+                                 cls, id, (unsigned)len, packets_ok, packets_bad);
+                    } else {
+                        packets_bad++;
+                        ESP_LOGW(TAG,
+                                 "UBX cls=0x%02X id=0x%02X len=%u bad_ck (rx=%02X %02X calc=%02X %02X) (%" PRIu32
+                                 " ok / %" PRIu32 " bad)",
+                                 cls, id, (unsigned)len, rx_ck_a, rx_ck_b, ck_a, ck_b, packets_ok, packets_bad);
+                    }
+                    st = UBX_SYNC1;
+                    break;
+                default:
+                    st = UBX_SYNC1;
+                    break;
+                }
+            }
+        }
+    }
+}
