@@ -1,6 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "display_task.h"
+#include "tasks/power_manager_task.h"
 #include "telemetry.h"
 #include "esp_log.h"
 
@@ -40,6 +41,7 @@ void display_task(void *pvParameters)
                      (double)g->vel_e, (double)g->vel_d, (double)g->pdop);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        /* Charging mode: longer interval via power_manager (single source of truth). */
+        vTaskDelay(pdMS_TO_TICKS(power_manager_display_poll_ms()));
     }
 }

@@ -10,12 +10,14 @@
 #include "tasks/ntrip_task.h"
 #include "tasks/display_task.h"
 #include "tasks/touch_task.h"
+#include "tasks/power_manager_task.h"
 
 static const char *TAG = "main";
 
 enum {
     TASK_STACK_DEFAULT = 4096,
     TASK_STACK_NET = 8192,
+    PRI_POWER = 6,
     PRI_GYRO = 5,
     PRI_FUEL = 5,
     PRI_RTK = 5,
@@ -27,6 +29,8 @@ enum {
 void app_main(void)
 {
     ESP_LOGI(TAG, "DGPS init");
+
+    ESP_ERROR_CHECK(power_manager_gpio_init());
 
     telemetry_init();
 
@@ -45,15 +49,28 @@ void app_main(void)
         return;
     }
 
-    /* Core 0: gyro (IMU) + fuel gauge (shared I2C) + RTK UART */
-    xTaskCreatePinnedToCore(gyro_task, "gyro", TASK_STACK_DEFAULT, NULL, PRI_GYRO, NULL, 0);
-    xTaskCreatePinnedToCore(fuel_gauge_task, "fuel", TASK_STACK_DEFAULT, NULL, PRI_FUEL, NULL, 0);
-    xTaskCreatePinnedToCore(rtk_task, "rtk", TASK_STACK_DEFAULT, NULL, PRI_RTK, NULL, 0);
+    static power_manager_handles_t s_pm_handles;
+
+    /* Raise main priority so gyro/fuel/rtk cannot run until suspended (they outrank app_main by default). */
+    const UBaseType_t saved_prio = uxTaskPriorityGet(NULL);
+    vTaskPrioritySet(NULL, (UBaseType_t)(configMAX_PRIORITIES - 1));
+
+    /* Core 0: gyro (IMU) + fuel gauge (shared I2C) + RTK UART — start suspended until power_manager decides mode */
+    xTaskCreatePinnedToCore(gyro_task, "gyro", TASK_STACK_DEFAULT, NULL, PRI_GYRO, &s_pm_handles.gyro, 0);
+    vTaskSuspend(s_pm_handles.gyro);
+    xTaskCreatePinnedToCore(fuel_gauge_task, "fuel", TASK_STACK_DEFAULT, NULL, PRI_FUEL, &s_pm_handles.fuel, 0);
+    vTaskSuspend(s_pm_handles.fuel);
+    xTaskCreatePinnedToCore(rtk_task, "rtk", TASK_STACK_DEFAULT, NULL, PRI_RTK, &s_pm_handles.rtk, 0);
+    vTaskSuspend(s_pm_handles.rtk);
+
+    vTaskPrioritySet(NULL, saved_prio);
 
     /* Core 1: network + UI */
     // xTaskCreatePinnedToCore(ntrip_task, "ntrip", TASK_STACK_NET, NULL, PRI_NTRIP, NULL, 1);
-    xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, NULL, 1);
+    xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, &s_pm_handles.display, 1);
     // xTaskCreatePinnedToCore(touch_task, "touch", TASK_STACK_DEFAULT, NULL, PRI_TOUCH, NULL, 1);
+
+    xTaskCreatePinnedToCore(power_manager_task, "power", TASK_STACK_DEFAULT, &s_pm_handles, PRI_POWER, NULL, 0);
 
     ESP_LOGI(TAG, "All tasks started");
     vTaskDelete(NULL);

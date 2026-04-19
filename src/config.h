@@ -30,4 +30,9 @@
 #define CFG_DISPLAY_CS_GPIO         10
 #define CFG_DISPLAY_DC_GPIO         11
 
+/* Power / charger (BQ24079): button input (LOW = pressed), SYSOFF out (LOW = run), CHG in (LOW = plugged) */
+#define CFG_BUTTON_GPIO             4
+#define CFG_SYSOFF_GPIO             47
+#define CFG_CHG_GPIO                1
+
 #endif
