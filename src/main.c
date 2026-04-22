@@ -55,12 +55,12 @@ void app_main(void)
     const UBaseType_t saved_prio = uxTaskPriorityGet(NULL);
     vTaskPrioritySet(NULL, (UBaseType_t)(configMAX_PRIORITIES - 1));
 
-    /* Core 0: gyro (IMU) + fuel gauge (shared I2C) + RTK UART — start suspended until power_manager decides mode */
-    xTaskCreatePinnedToCore(gyro_task, "gyro", TASK_STACK_DEFAULT, NULL, PRI_GYRO, &s_pm_handles.gyro, 0);
+    /* Core 1: gyro (IMU) + fuel gauge (shared I2C) + RTK UART — start suspended until power_manager decides mode */
+    xTaskCreatePinnedToCore(gyro_task, "gyro", TASK_STACK_DEFAULT, NULL, PRI_GYRO, &s_pm_handles.gyro, 1);
     vTaskSuspend(s_pm_handles.gyro);
-    xTaskCreatePinnedToCore(fuel_gauge_task, "fuel", TASK_STACK_DEFAULT, NULL, PRI_FUEL, &s_pm_handles.fuel, 0);
+    xTaskCreatePinnedToCore(fuel_gauge_task, "fuel", TASK_STACK_DEFAULT, NULL, PRI_FUEL, &s_pm_handles.fuel, 1);
     vTaskSuspend(s_pm_handles.fuel);
-    xTaskCreatePinnedToCore(rtk_task, "rtk", TASK_STACK_DEFAULT, NULL, PRI_RTK, &s_pm_handles.rtk, 0);
+    xTaskCreatePinnedToCore(rtk_task, "rtk", TASK_STACK_DEFAULT, NULL, PRI_RTK, &s_pm_handles.rtk, 1);
     vTaskSuspend(s_pm_handles.rtk);
 
     vTaskPrioritySet(NULL, saved_prio);
@@ -70,7 +70,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, &s_pm_handles.display, 1);
     // xTaskCreatePinnedToCore(touch_task, "touch", TASK_STACK_DEFAULT, NULL, PRI_TOUCH, NULL, 1);
 
-    xTaskCreatePinnedToCore(power_manager_task, "power", TASK_STACK_DEFAULT, &s_pm_handles, PRI_POWER, NULL, 0);
+    xTaskCreatePinnedToCore(power_manager_task, "power", TASK_STACK_DEFAULT, &s_pm_handles, PRI_POWER, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks started");
     vTaskDelete(NULL);
