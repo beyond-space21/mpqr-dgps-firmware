@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 0.5.3
   espressif/esp_lcd_co5300:
-    component_hash: 279a9c8b1cc62be11680f57ba98a477942991c4409e3e43af216eb84f8aa7070
+    component_hash: 7004162c496b65a5e0ee7c92800c33c12b373ea70d07199318a182cb16c741b7
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -18,11 +18,11 @@ dependencies:
       version: 0.*
     - name: idf
       require: private
-      version: '>=5.3'
+      version: '>=5.4'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.0.2
+    version: 2.0.3
   idf:
     source:
       type: idf
@@ -38,6 +38,6 @@ direct_dependencies:
 - espressif/esp_lcd_co5300
 - idf
 - lvgl/lvgl
-manifest_hash: 7a5a51b5b02fa24678df6cb376ad304daba31bb58b402fce5a3005a77df1b3f1
+manifest_hash: ffac3af2d11d2510116c0c79f71f89df38330b11bdefa22bdba9e125c4002721
 target: esp32s3
 version: 2.0.0
