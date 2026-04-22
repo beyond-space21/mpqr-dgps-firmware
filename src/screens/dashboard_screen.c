@@ -10,6 +10,15 @@ struct dashboard_screen {
     operation_log_widget_t *operation_log;
 };
 
+void dashboard_screen_render_boot_wait(dashboard_screen_t *screen)
+{
+    if (!screen) {
+        return;
+    }
+    battery_widget_set_visible(screen->battery, false);
+    operation_log_widget_set_visible(screen->operation_log, false);
+}
+
 dashboard_screen_t *dashboard_screen_create(void)
 {
     dashboard_screen_t *screen = lv_mem_alloc(sizeof(dashboard_screen_t));

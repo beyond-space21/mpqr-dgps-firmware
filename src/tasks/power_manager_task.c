@@ -19,6 +19,10 @@
 #define POWER_CHG_POLL_MS           50
 /** After unplug (CHG HIGH), hold this long before SYSOFF (debounces brief glitches). */
 #define POWER_CHG_UNPLUG_SHUTDOWN_MS 500
+/** Boot-time PG qualification window to reject brief false-low glitches. */
+#define POWER_BOOT_PG_STABLE_MS      120
+/** Sampling step used while qualifying PG at boot. */
+#define POWER_BOOT_PG_SAMPLE_MS      10
 
 typedef enum {
     EV_LONG_PRESS_CONFIRMED = 0,
@@ -51,6 +55,7 @@ static void apply_operation_mode(void);
 static void enter_shutdown(void);
 static void charging_mode_reset_chg_poll(void);
 static void poll_chg_while_charging(void);
+static bool is_charger_plugged_stable_boot(void);
 static void debounce_timer_cb(TimerHandle_t t);
 static void hold_timer_cb(TimerHandle_t t);
 static void button_gpio_isr(void *arg);
@@ -247,11 +252,23 @@ static void IRAM_ATTR button_gpio_isr(void *arg)
     }
 }
 
+static bool is_charger_plugged_stable_boot(void)
+{
+    const int samples = (POWER_BOOT_PG_STABLE_MS / POWER_BOOT_PG_SAMPLE_MS);
+    for (int i = 0; i < samples; i++) {
+        if (gpio_get_level(CFG_CHG_GPIO) != 0) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(POWER_BOOT_PG_SAMPLE_MS));
+    }
+    return true;
+}
+
 static void run_boot_check(void)
 {
     const int chg_level = gpio_get_level(CFG_CHG_GPIO);
     const int btn_level = gpio_get_level(CFG_BUTTON_GPIO);
-    const bool charger_plugged = (chg_level == 0);
+    const bool charger_plugged = (chg_level == 0) && is_charger_plugged_stable_boot();
     const bool button_pressed = (btn_level == 0);
 
     ESP_LOGI("POWER", "BOOT_CHECK: CHG=%d BTN=%d", chg_level, btn_level);
@@ -349,8 +366,14 @@ void power_manager_task(void *pvParameters)
             if (ev == EV_BOOT_BUTTON_RELEASED) {
                 if (s_awaiting_boot_long_press) {
                     s_awaiting_boot_long_press = false;
-                    ESP_LOGI("POWER", "BOOT_CHECK: button released before 2 s → CHARGING (safe)");
-                    apply_charging_mode();
+                    const bool charger_plugged = (gpio_get_level(CFG_CHG_GPIO) == 0);
+                    if (charger_plugged) {
+                        ESP_LOGI("POWER", "BOOT_CHECK: button released before 2 s with CHG present -> CHARGING");
+                        apply_charging_mode();
+                    } else {
+                        ESP_LOGI("POWER", "BOOT_CHECK: button released before 2 s with no CHG -> SHUTDOWN");
+                        enter_shutdown();
+                    }
                 }
             } else if (ev == EV_LONG_PRESS_CONFIRMED) {
                 ESP_LOGI("POWER", "long press confirmed");

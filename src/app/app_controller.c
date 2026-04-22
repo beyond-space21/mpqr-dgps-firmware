@@ -33,10 +33,12 @@ void app_controller_update(app_controller_t *app)
     }
 
     power_manager_mode_t mode = power_manager_current_mode();
-    if (mode == POWER_MANAGER_MODE_CHARGING) {
+    if (mode == POWER_MANAGER_MODE_OPERATION) {
+        dashboard_screen_render_operation(app->dashboard, &t);
+    } else if (mode == POWER_MANAGER_MODE_CHARGING) {
         dashboard_screen_render_charging(app->dashboard, app->battery_percentage);
     } else {
-        dashboard_screen_render_operation(app->dashboard, &t);
+        dashboard_screen_render_boot_wait(app->dashboard);
     }
 
     app->next_render_tick = now + pdMS_TO_TICKS(250);
