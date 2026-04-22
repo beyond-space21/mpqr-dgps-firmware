@@ -60,6 +60,21 @@ uint32_t power_manager_display_poll_ms(void)
     return s_display_poll_ms;
 }
 
+power_manager_mode_t power_manager_current_mode(void)
+{
+    switch (s_pwr_state) {
+        case PWR_STATE_CHARGING_MODE:
+            return POWER_MANAGER_MODE_CHARGING;
+        case PWR_STATE_OPERATION_MODE:
+            return POWER_MANAGER_MODE_OPERATION;
+        case PWR_STATE_SHUTDOWN:
+            return POWER_MANAGER_MODE_SHUTDOWN;
+        case PWR_STATE_BOOT_CHECK:
+        default:
+            return POWER_MANAGER_MODE_BOOT_CHECK;
+    }
+}
+
 esp_err_t power_manager_gpio_init(void)
 {
     gpio_config_t btn = {
