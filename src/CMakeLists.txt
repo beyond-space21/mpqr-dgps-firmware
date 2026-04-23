@@ -1,8 +1,45 @@
-# This file was automatically generated for projects
-# without default 'CMakeLists.txt' file.
+set(app_sources
+    app/app_bootstrap.c
+    app/app_controller.c
+    app/onboarding_controller.c
+    ble/ble_onboarding_gatt.c
+    ble/onboarding_protocol.c
+    bq27441.c
+    display/display_driver.c
+    display/display_touch_cst820.c
+    i2c_bus.c
+    main.c
+    network/wifi_manager.c
+    network/ws_server.c
+    screens/dashboard_screen.c
+    storage/device_settings.c
+    tasks/display_task.c
+    tasks/fuel_gauge_task.c
+    tasks/gyro_task.c
+    tasks/ntrip_task.c
+    tasks/onboarding_task.c
+    tasks/power_manager_task.c
+    tasks/rtk_task.c
+    tasks/touch_task.c
+    telemetry.c
+    widgets/battery_widget.c
+    widgets/operation_log_widget.c
+)
 
-FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
-
-idf_component_register(SRCS ${app_sources}
-    REQUIRES bno055 esp_driver_i2c esp_driver_uart esp_driver_gpio lvgl esp_lcd esp_lcd_co5300 esp_lcd_touch_cst820
+idf_component_register(
+    SRCS ${app_sources}
+    REQUIRES bno055
+             bt
+             esp_driver_gpio
+             esp_driver_i2c
+             esp_driver_uart
+             esp_event
+             esp_http_server
+             esp_lcd
+             esp_lcd_co5300
+             esp_lcd_touch_cst820
+             esp_netif
+             esp_wifi
+             lvgl
+             nvs_flash
 )

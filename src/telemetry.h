@@ -30,6 +30,7 @@ typedef struct {
     float vel_e;
     float vel_d;
     float pdop;
+    char gga[160];
 } telemetry_rtk_t;
 
 /** BQ27441 snapshot (written by fuel_gauge_task). */

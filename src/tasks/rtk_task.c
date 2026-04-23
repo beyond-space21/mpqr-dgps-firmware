@@ -362,11 +362,11 @@ void rtk_task(void *pvParameters)
                                         .vel_d = (float)((double)velD / 1000.0),
                                         .pdop = (float)((double)pDOP / 100.0),
                                     };
-                                    telemetry_set_rtk(&r);
-
                                     char gga[160];
                                     build_gga_from_nav_pvt(payload_head, numsv, gga, sizeof(gga));
-                                    ESP_LOGI(TAG, "GGA: %s", gga);
+                                    (void)strncpy(r.gga, gga, sizeof(r.gga) - 1);
+                                    telemetry_set_rtk(&r);
+                                    // ESP_LOGI(TAG, "GGA: %s", gga);
                                 }
                             }
                         }

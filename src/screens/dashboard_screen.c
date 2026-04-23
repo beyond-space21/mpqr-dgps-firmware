@@ -1,6 +1,9 @@
 #include "screens/dashboard_screen.h"
 
 #include <stdio.h>
+#include <string.h>
+#include "app/onboarding_controller.h"
+#include "esp_log.h"
 #include "lvgl.h"
 #include "widgets/battery_widget.h"
 #include "widgets/operation_log_widget.h"
@@ -9,7 +12,21 @@ struct dashboard_screen {
     battery_widget_t *battery;
     operation_log_widget_t *operation_log;
     lv_obj_t *operation_button;
+    lv_obj_t *operation_button_label;
 };
+
+static const char *TAG = "dashboard_ui";
+
+static void operation_button_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (onboarding_controller_is_waiting_user_confirm()) {
+        ESP_LOGI(TAG, "User pressed CONFIRM for pairing code");
+        onboarding_controller_confirm_pairing(true);
+    }
+}
 
 void dashboard_screen_render_boot_wait(dashboard_screen_t *screen)
 {
@@ -19,6 +36,28 @@ void dashboard_screen_render_boot_wait(dashboard_screen_t *screen)
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, false);
     lv_obj_add_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
+}
+
+void dashboard_screen_render_onboarding(dashboard_screen_t *screen, const char *title, const char *detail)
+{
+    if (!screen) {
+        return;
+    }
+
+    char text[320];
+    (void)snprintf(text, sizeof(text), "%s\n\n%s",
+                   (title != NULL) ? title : "Onboarding",
+                   (detail != NULL) ? detail : "Waiting");
+
+    battery_widget_set_visible(screen->battery, false);
+    operation_log_widget_set_visible(screen->operation_log, true);
+    if (title != NULL && strcmp(title, "Pair Confirmation") == 0) {
+        lv_label_set_text(screen->operation_button_label, "CONFIRM");
+        lv_obj_clear_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    operation_log_widget_render(screen->operation_log, text);
 }
 
 dashboard_screen_t *dashboard_screen_create(void)
@@ -48,9 +87,10 @@ dashboard_screen_t *dashboard_screen_create(void)
     lv_obj_set_style_bg_color(screen->operation_button, lv_palette_main(LV_PALETTE_GREEN), LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_set_style_text_color(screen->operation_button, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
 
-    lv_obj_t *btn_label = lv_label_create(screen->operation_button);
-    lv_label_set_text(btn_label, "ACTION");
-    lv_obj_center(btn_label);
+    screen->operation_button_label = lv_label_create(screen->operation_button);
+    lv_label_set_text(screen->operation_button_label, "ACTION");
+    lv_obj_center(screen->operation_button_label);
+    lv_obj_add_event_cb(screen->operation_button, operation_button_cb, LV_EVENT_CLICKED, NULL);
 
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, false);
@@ -89,5 +129,6 @@ void dashboard_screen_render_operation(dashboard_screen_t *screen, const telemet
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, true);
     lv_obj_clear_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(screen->operation_button_label, "ACTION");
     operation_log_widget_render(screen->operation_log, text);
 }
