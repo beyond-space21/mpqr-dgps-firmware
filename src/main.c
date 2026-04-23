@@ -1,7 +1,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_intr_alloc.h"
 #include "i2c_bus.h"
 #include "telemetry.h"
 #include "tasks/gyro_task.h"
@@ -9,7 +11,6 @@
 #include "tasks/rtk_task.h"
 #include "tasks/ntrip_task.h"
 #include "tasks/display_task.h"
-#include "tasks/touch_task.h"
 #include "tasks/power_manager_task.h"
 
 static const char *TAG = "main";
@@ -22,13 +23,21 @@ enum {
     PRI_FUEL = 5,
     PRI_RTK = 5,
     PRI_NTRIP = 4,
-    PRI_TOUCH = 4,
     PRI_DISPLAY = 3,
 };
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "DGPS init");
+
+    /* One install for all GPIO ISRs (power button + optional touch). Avoids duplicate install noise. */
+    {
+        const esp_err_t isr = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+        if (isr != ESP_OK && isr != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "gpio_install_isr_service: %s", esp_err_to_name(isr));
+            return;
+        }
+    }
 
     ESP_ERROR_CHECK(power_manager_gpio_init());
 
@@ -38,6 +47,9 @@ void app_main(void)
         ESP_LOGE(TAG, "I2C bus init failed");
         return;
     }
+
+    i2c_bus_tp_rst_pulse();
+    i2c_bus_scan();
 
     if (gyro_peripherals_init() != ESP_OK) {
         ESP_LOGE(TAG, "Gyro peripherals init failed");
@@ -68,7 +80,7 @@ void app_main(void)
     /* Core 1: network + UI */
     // xTaskCreatePinnedToCore(ntrip_task, "ntrip", TASK_STACK_NET, NULL, PRI_NTRIP, NULL, 1);
     xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, &s_pm_handles.display, 1);
-    // xTaskCreatePinnedToCore(touch_task, "touch", TASK_STACK_DEFAULT, NULL, PRI_TOUCH, NULL, 1);
+    /* Touch is bound to LVGL indev in display_touch_cst820.c; no standalone touch task. */
 
     xTaskCreatePinnedToCore(power_manager_task, "power", TASK_STACK_DEFAULT, &s_pm_handles, PRI_POWER, NULL, 1);
 

@@ -1,4 +1,5 @@
 #include "display/display_driver.h"
+#include "display/display_touch_cst820.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -165,6 +166,8 @@ esp_err_t display_driver_init(void)
     const esp_lcd_panel_io_callbacks_t cbs = {.on_color_trans_done = notify_lvgl_flush_ready};
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, &s_disp_drv));
     lv_disp_drv_register(&s_disp_drv);
+
+    ESP_ERROR_CHECK(display_touch_cst820_init());
 
     const esp_timer_create_args_t lvgl_tick_timer_args = {.callback = lvgl_tick_cb, .name = "lvgl_tick"};
     esp_timer_handle_t lvgl_tick_timer = NULL;

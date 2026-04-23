@@ -2,3 +2,4 @@ dependencies:
   adithya-187326/bno055: "^1.0.1"
   lvgl/lvgl: "^8.3.11"
   espressif/esp_lcd_co5300: "^2.0.3"
+  kodediy/esp_lcd_touch_cst820: "^1.0.1"

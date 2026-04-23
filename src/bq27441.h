@@ -16,4 +16,7 @@ esp_err_t bq27441_read_voltage_mv(i2c_master_dev_handle_t dev, uint16_t *mv);
 /** State of charge 0.1 % units (0–1000). */
 esp_err_t bq27441_read_soc_raw(i2c_master_dev_handle_t dev, uint16_t *soc_x10);
 
+/** Average current in mA (signed, discharge typically negative). */
+esp_err_t bq27441_read_avg_current_ma(i2c_master_dev_handle_t dev, int16_t *ma);
+
 #endif

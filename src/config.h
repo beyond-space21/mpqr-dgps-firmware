@@ -16,7 +16,12 @@
 
 /* BQ27441-G1A fuel gauge (same I2C bus as BNO055; 7-bit addr 0x55) */
 #define CFG_BQ27441_I2C_ADDR        0x55
-#define CFG_TOUCH_I2C_ADDR          0x38
+/** CST820 / CST8xx 7-bit I2C (scan showed 0x15). */
+#define CFG_TOUCH_I2C_ADDR          0x15
+/** Touch panel reset (active low), TP_RST. */
+#define CFG_TOUCH_RESET_GPIO        16
+/** Touch interrupt input, TP_INT. */
+#define CFG_TOUCH_INT_GPIO          5
 
 /* RTK GNSS module UART */
 #define CFG_RTK_UART_NUM            UART_NUM_1

@@ -340,12 +340,6 @@ void power_manager_task(void *pvParameters)
         return;
     }
 
-    esp_err_t isre = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    if (isre != ESP_OK && isre != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE("POWER", "gpio_install_isr_service: %s", esp_err_to_name(isre));
-        return;
-    }
-
     ESP_ERROR_CHECK(gpio_set_intr_type(CFG_BUTTON_GPIO, GPIO_INTR_ANYEDGE));
     ESP_ERROR_CHECK(gpio_isr_handler_add(CFG_BUTTON_GPIO, button_gpio_isr, NULL));
 

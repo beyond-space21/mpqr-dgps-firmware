@@ -38,6 +38,7 @@ typedef struct {
     /** 0–100 % when valid */
     float soc_percent;
     uint16_t voltage_mv;
+    int16_t current_ma;
 } telemetry_battery_t;
 
 /** Central sensor / state store; protected by @ref telemetry_mutex */

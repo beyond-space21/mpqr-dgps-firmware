@@ -7,6 +7,7 @@
 #include "driver/uart.h"
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "rtk_task";
@@ -19,6 +20,96 @@ static void ubx_ck_update(uint8_t b, uint8_t *ck_a, uint8_t *ck_b)
 {
     *ck_a = (uint8_t)(*ck_a + b);
     *ck_b = (uint8_t)(*ck_b + *ck_a);
+}
+
+static uint8_t nmea_checksum_body(const char *body)
+{
+    uint8_t ck = 0;
+    while (*body) {
+        ck ^= (uint8_t)(*body++);
+    }
+    return ck;
+}
+
+static void deg_to_nmea(double deg, bool is_lat, char *out, size_t out_len)
+{
+    double abs_deg = (deg < 0.0) ? -deg : deg;
+    int d = (int)abs_deg;
+    double m = (abs_deg - (double)d) * 60.0;
+    if (is_lat) {
+        snprintf(out, out_len, "%02d%010.7f", d, m); /* DDMM.mmmmmmm */
+    } else {
+        snprintf(out, out_len, "%03d%010.7f", d, m); /* DDDMM.mmmmmmm */
+    }
+}
+
+static int gga_quality_from_nav_pvt(uint8_t fix_type, uint8_t flags)
+{
+    /* UBX-NAV-PVT flags:
+     * bit1: diffSoln
+     * bits6..7: carrSoln (0 none, 1 float, 2 fixed)
+     */
+    const bool gnss_fix_ok = (flags & 0x01u) != 0u;
+    const bool diff_soln = (flags & 0x02u) != 0u;
+    const uint8_t carr_soln = (flags >> 6) & 0x03u;
+
+    if (fix_type < 3 || !gnss_fix_ok) {
+        return 0;
+    }
+    if (!diff_soln) {
+        return 1; /* GPS/SPS */
+    }
+    if (carr_soln == 2u) {
+        return 4; /* RTK fixed */
+    }
+    if (carr_soln == 1u) {
+        return 5; /* RTK float */
+    }
+    return 2; /* DGPS */
+}
+
+static void build_gga_from_nav_pvt(const uint8_t *pvt, uint8_t num_sv, char *out, size_t out_len)
+{
+    const uint8_t hour = pvt[8];
+    const uint8_t min = pvt[9];
+    const uint8_t sec = pvt[10];
+    const int32_t nano = rd_i32_le(&pvt[16]);
+    const uint8_t fix_type = pvt[20];
+    const uint8_t flags = pvt[21];
+    const int32_t lon = rd_i32_le(&pvt[24]);    /* 1e-7 deg */
+    const int32_t lat = rd_i32_le(&pvt[28]);    /* 1e-7 deg */
+    const int32_t hmsl_mm = rd_i32_le(&pvt[36]); /* mm */
+    const uint16_t pDOP = rd_u16_le(&pvt[76]);  /* 0.01 */
+
+    const char ns = (lat >= 0) ? 'N' : 'S';
+    const char ew = (lon >= 0) ? 'E' : 'W';
+    const int quality = gga_quality_from_nav_pvt(fix_type, flags);
+    const double lat_deg = (double)lat / 1e7;
+    const double lon_deg = (double)lon / 1e7;
+    const double alt_m = (double)hmsl_mm / 1000.0;
+    const double hdop = (double)pDOP / 100.0; /* fallback: NAV-PVT pDOP */
+
+    int centi = nano / 10000000; /* hundredths */
+    if (centi < 0) {
+        centi = 0;
+    } else if (centi > 99) {
+        centi = 99;
+    }
+
+    char time_str[16];
+    char lat_str[20];
+    char lon_str[20];
+    snprintf(time_str, sizeof(time_str), "%02u%02u%02u.%02d", (unsigned)hour, (unsigned)min,
+             (unsigned)sec, centi);
+    deg_to_nmea(lat_deg, true, lat_str, sizeof(lat_str));
+    deg_to_nmea(lon_deg, false, lon_str, sizeof(lon_str));
+
+    char body[128];
+    snprintf(body, sizeof(body), "GNGGA,%s,%s,%c,%s,%c,%d,%02u,%.1f,%.2f,M,,M,,", time_str,
+             lat_str, ns, lon_str, ew, quality, (unsigned)num_sv, hdop, alt_m);
+
+    const uint8_t ck = nmea_checksum_body(body);
+    snprintf(out, out_len, "$%s*%02X\r\n", body, (unsigned)ck);
 }
 
 typedef enum {
@@ -272,6 +363,10 @@ void rtk_task(void *pvParameters)
                                         .pdop = (float)((double)pDOP / 100.0),
                                     };
                                     telemetry_set_rtk(&r);
+
+                                    char gga[160];
+                                    build_gga_from_nav_pvt(payload_head, numsv, gga, sizeof(gga));
+                                    ESP_LOGI(TAG, "GGA: %s", gga);
                                 }
                             }
                         }

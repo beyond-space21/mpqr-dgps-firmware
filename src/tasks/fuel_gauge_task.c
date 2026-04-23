@@ -65,16 +65,19 @@ void fuel_gauge_task(void *pvParameters)
 
         uint16_t mv = 0;
         uint16_t soc_x10 = 0;
+        int16_t current_ma = 0;
         esp_err_t ev = bq27441_read_voltage_mv(s_fg_dev, &mv);
         esp_err_t es = bq27441_read_soc_raw(s_fg_dev, &soc_x10);
+        esp_err_t ec = bq27441_read_avg_current_ma(s_fg_dev, &current_ma);
 
         xSemaphoreGive(i2c_mutex);
 
         telemetry_battery_t b = {0};
-        if (ev == ESP_OK && es == ESP_OK && mv >= 2000u && mv <= 5000u && soc_x10 <= 1000u) {
+        if (ev == ESP_OK && es == ESP_OK && ec == ESP_OK && mv >= 2000u && mv <= 5000u && soc_x10 <= 1000u) {
             b.valid = true;
             b.voltage_mv = mv;
             b.soc_percent = (float)soc_x10 / 10.0f;
+            b.current_ma = current_ma;
         } else {
             b.valid = false;
         }

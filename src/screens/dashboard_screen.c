@@ -8,6 +8,7 @@
 struct dashboard_screen {
     battery_widget_t *battery;
     operation_log_widget_t *operation_log;
+    lv_obj_t *operation_button;
 };
 
 void dashboard_screen_render_boot_wait(dashboard_screen_t *screen)
@@ -17,6 +18,7 @@ void dashboard_screen_render_boot_wait(dashboard_screen_t *screen)
     }
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, false);
+    lv_obj_add_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
 }
 
 dashboard_screen_t *dashboard_screen_create(void)
@@ -32,13 +34,27 @@ dashboard_screen_t *dashboard_screen_create(void)
 
     screen->battery = battery_widget_create(scr);
     screen->operation_log = operation_log_widget_create(scr);
-    if (!screen->battery || !screen->operation_log) {
+    screen->operation_button = lv_btn_create(scr);
+    if (!screen->battery || !screen->operation_log || !screen->operation_button) {
         lv_mem_free(screen);
         return NULL;
     }
 
+    lv_obj_set_size(screen->operation_button, 140, 56);
+    lv_obj_align(screen->operation_button, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_set_style_radius(screen->operation_button, 14, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(screen->operation_button, lv_color_hex(0x3A3A3A), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen->operation_button, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(screen->operation_button, lv_palette_main(LV_PALETTE_GREEN), LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(screen->operation_button, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+
+    lv_obj_t *btn_label = lv_label_create(screen->operation_button);
+    lv_label_set_text(btn_label, "ACTION");
+    lv_obj_center(btn_label);
+
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, false);
+    lv_obj_add_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
     return screen;
 }
 
@@ -49,6 +65,7 @@ void dashboard_screen_render_charging(dashboard_screen_t *screen, uint8_t batter
     }
     operation_log_widget_set_visible(screen->operation_log, false);
     battery_widget_set_visible(screen->battery, true);
+    lv_obj_add_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
     battery_widget_render(screen->battery, battery_percentage);
 }
 
@@ -60,16 +77,17 @@ void dashboard_screen_render_operation(dashboard_screen_t *screen, const telemet
 
     char text[320];
     snprintf(text, sizeof(text),
-             "IMU valid: %s\nYaw: %.1f  Roll: %.1f  Pitch: %.1f\n\nBattery valid: %s\nSOC: %.1f%%  Voltage: %u mV\n\nRTK valid: %s\nFix: %u  SV: %u/%u\nLat: %.7f\nLon: %.7f",
+             "IMU valid: %s\nYaw: %.1f  Roll: %.1f  Pitch: %.1f\n\nBattery valid: %s\nSOC: %.1f%%  Voltage: %u mV\nCurrent: %d mA\n\nRTK valid: %s\nFix: %u  SV: %u/%u\nLat: %.7f\nLon: %.7f",
              telemetry->imu_valid ? "yes" : "no", (double)telemetry->imu_yaw_deg,
              (double)telemetry->imu_roll_deg, (double)telemetry->imu_pitch_deg,
              telemetry->battery.valid ? "yes" : "no", (double)telemetry->battery.soc_percent,
-             (unsigned)telemetry->battery.voltage_mv, telemetry->rtk.valid ? "yes" : "no",
+             (unsigned)telemetry->battery.voltage_mv, (int)telemetry->battery.current_ma, telemetry->rtk.valid ? "yes" : "no",
              (unsigned)telemetry->rtk.fix_type, (unsigned)telemetry->rtk.num_sv,
              (unsigned)telemetry->rtk.num_sv_visible, (double)telemetry->rtk.lat_deg,
              (double)telemetry->rtk.lon_deg);
 
     battery_widget_set_visible(screen->battery, false);
     operation_log_widget_set_visible(screen->operation_log, true);
+    lv_obj_clear_flag(screen->operation_button, LV_OBJ_FLAG_HIDDEN);
     operation_log_widget_render(screen->operation_log, text);
 }
