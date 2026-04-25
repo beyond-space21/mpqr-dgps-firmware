@@ -12,6 +12,7 @@ typedef struct {
     TaskHandle_t fuel;
     TaskHandle_t rtk;
     TaskHandle_t display;
+    TaskHandle_t onboarding;
 } power_manager_handles_t;
 
 typedef enum {

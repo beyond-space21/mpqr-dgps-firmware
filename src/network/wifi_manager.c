@@ -54,6 +54,12 @@ esp_err_t wifi_manager_start_softap(wifi_softap_credentials_t *out_creds)
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (s_state == WIFI_MANAGER_STATE_SOFTAP_READY) {
+        *out_creds = s_last_creds;
+        ESP_LOGI(TAG, "SoftAP already active (ssid=%s)", s_last_creds.ssid);
+        return ESP_OK;
+    }
+
     s_state = WIFI_MANAGER_STATE_SOFTAP_STARTING;
     make_temp_credentials(&s_last_creds);
     ESP_LOGI(TAG, "Starting SoftAP with temporary credentials");

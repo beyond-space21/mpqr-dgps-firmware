@@ -43,9 +43,14 @@ static void deg_to_nmea(double deg, bool is_lat, char *out, size_t out_len)
     }
 }
 
-static int gga_quality_from_nav_pvt(uint8_t fix_type, uint8_t flags)
+/**
+ * NMEA GGA-style fix quality (0–5) from UBX-NAV-PVT fixType + flags.
+ * Aligns with common GGA definitions: 0 invalid, 1 GPS, 2 DGPS, 3 PPS, 4 RTK fixed, 5 RTK float.
+ */
+static int nav_pvt_to_nmea_quality(uint8_t fix_type, uint8_t flags)
 {
     /* UBX-NAV-PVT flags:
+     * bit0: gnssFixOK
      * bit1: diffSoln
      * bits6..7: carrSoln (0 none, 1 float, 2 fixed)
      */
@@ -53,19 +58,27 @@ static int gga_quality_from_nav_pvt(uint8_t fix_type, uint8_t flags)
     const bool diff_soln = (flags & 0x02u) != 0u;
     const uint8_t carr_soln = (flags >> 6) & 0x03u;
 
-    if (fix_type < 3 || !gnss_fix_ok) {
+    if (fix_type == 0u || fix_type == 1u || !gnss_fix_ok) {
         return 0;
     }
-    if (!diff_soln) {
-        return 1; /* GPS/SPS */
+    /* u-blox: 5 = time only fix — report as PPS for app contract */
+    if (fix_type == 5u) {
+        return 3;
     }
     if (carr_soln == 2u) {
-        return 4; /* RTK fixed */
+        return 4;
     }
     if (carr_soln == 1u) {
-        return 5; /* RTK float */
+        return 5;
     }
-    return 2; /* DGPS */
+    if (diff_soln) {
+        return 2;
+    }
+    /* 2D / 3D / GNSS+DR without differential carrier solution */
+    if (fix_type >= 2u) {
+        return 1;
+    }
+    return 0;
 }
 
 static void build_gga_from_nav_pvt(const uint8_t *pvt, uint8_t num_sv, char *out, size_t out_len)
@@ -83,7 +96,7 @@ static void build_gga_from_nav_pvt(const uint8_t *pvt, uint8_t num_sv, char *out
 
     const char ns = (lat >= 0) ? 'N' : 'S';
     const char ew = (lon >= 0) ? 'E' : 'W';
-    const int quality = gga_quality_from_nav_pvt(fix_type, flags);
+    const int quality = nav_pvt_to_nmea_quality(fix_type, flags);
     const double lat_deg = (double)lat / 1e7;
     const double lon_deg = (double)lon / 1e7;
     const double alt_m = (double)hmsl_mm / 1000.0;
@@ -126,12 +139,24 @@ typedef enum {
 
 static esp_err_t po_wait_ok_fail(uart_port_t uart, int timeout_ms)
 {
-    /* BK166X spec §5.1: command reply is "$OK" or "$FAIL". */
-    char line[32];
-    size_t line_len = 0;
-    uint8_t b = 0;
+    /* BK166X spec §5.1: reply is "$OK" or "$FAIL" (line-terminated). UBX binary on the
+     * same UART has no newlines for long stretches; a fixed line buffer can wrap and
+     * drop a "$OK" that sits after binary. Match $OK / $FAIL as subsequences instead. */
+    typedef enum {
+        PO_IDLE,
+        PO_DOLLAR,
+        PO_OK_O,
+        PO_OK_K,
+        PO_FAIL_F,
+        PO_FAIL_A,
+        PO_FAIL_I,
+        PO_FAIL_L,
+    } po_ack_st_t;
 
+    po_ack_st_t st = PO_IDLE;
+    uint8_t b = 0;
     int waited_ms = 0;
+
     while (waited_ms < timeout_ms) {
         int n = uart_read_bytes(uart, &b, 1, pdMS_TO_TICKS(20));
         waited_ms += 20;
@@ -139,25 +164,43 @@ static esp_err_t po_wait_ok_fail(uart_port_t uart, int timeout_ms)
             continue;
         }
 
-        if (b == '\r') {
-            continue;
-        }
-        if (b == '\n') {
-            line[line_len] = '\0';
-            if (strcmp(line, "$OK") == 0) {
+        switch (st) {
+        case PO_IDLE:
+            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
+            break;
+        case PO_DOLLAR:
+            if (b == 'O') {
+                st = PO_OK_O;
+            } else if (b == 'F') {
+                st = PO_FAIL_F;
+            } else {
+                st = (b == '$') ? PO_DOLLAR : PO_IDLE;
+            }
+            break;
+        case PO_OK_O:
+            st = (b == 'K') ? PO_OK_K : ((b == '$') ? PO_DOLLAR : PO_IDLE);
+            break;
+        case PO_OK_K:
+            if (b == '\r' || b == '\n') {
                 return ESP_OK;
             }
-            if (strcmp(line, "$FAIL") == 0) {
+            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
+            break;
+        case PO_FAIL_F:
+            st = (b == 'A') ? PO_FAIL_A : ((b == '$') ? PO_DOLLAR : PO_IDLE);
+            break;
+        case PO_FAIL_A:
+            st = (b == 'I') ? PO_FAIL_I : ((b == '$') ? PO_DOLLAR : PO_IDLE);
+            break;
+        case PO_FAIL_I:
+            st = (b == 'L') ? PO_FAIL_L : ((b == '$') ? PO_DOLLAR : PO_IDLE);
+            break;
+        case PO_FAIL_L:
+            if (b == '\r' || b == '\n') {
                 return ESP_FAIL;
             }
-            line_len = 0;
-            continue;
-        }
-
-        if (line_len + 1 < sizeof(line)) {
-            line[line_len++] = (char)b;
-        } else {
-            line_len = 0;
+            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
+            break;
         }
     }
     return ESP_ERR_TIMEOUT;
@@ -175,6 +218,47 @@ static esp_err_t rtk_disable_nmea_output_on_startup(uart_port_t uart)
         ESP_LOGW(TAG, "BK166X: NMEA disable did not return $OK: %s", esp_err_to_name(err));
     }
     return err;
+}
+
+/**
+ * BK166X $POLCFGRTCM,msmType,msmRate,ephFlag: msmRate 0 disables RTCM output from the
+ * module on this UART so externally injected RTCM (e.g. WebSocket binary → UART) is
+ * not interleaved with self-generated RTCM.
+ */
+static esp_err_t rtk_disable_module_rtcm_output_for_external_injection(uart_port_t uart)
+{
+    static const char cmd[] = "$POLCFGRTCM,0,0,0\r\n";
+    uart_write_bytes(uart, cmd, sizeof(cmd) - 1);
+    esp_err_t err = po_wait_ok_fail(uart, 500);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "BK166X: module RTCM TX off; UART for external RTCM ($OK)");
+    } else {
+        ESP_LOGW(TAG, "BK166X: POLCFGRTCM (disable module RTCM out) no $OK: %s",
+                 esp_err_to_name(err));
+    }
+    return err;
+}
+
+/** UBX-CFG-MSG: enable NAV-STATUS (0x01 0x03) at 1 Hz on UART1 (u-blox-style). */
+static void rtk_ubx_enable_nav_status_uart1(uart_port_t uart)
+{
+    static const uint8_t body[] = {
+        0x06, 0x01, 0x08, 0x00, /* CFG-MSG, len 8 */
+        0x01, 0x03,             /* NAV-STATUS */
+        0x00, 0x01, 0x00, 0x00, 0x00, 0x00 /* I2C, UART1, UART2, USB, SPI */
+    };
+    uint8_t ck_a = 0, ck_b = 0;
+    for (size_t i = 0; i < sizeof(body); i++) {
+        ubx_ck_update(body[i], &ck_a, &ck_b);
+    }
+    uint8_t pkt[2 + sizeof(body) + 2];
+    pkt[0] = 0xB5;
+    pkt[1] = 0x62;
+    memcpy(pkt + 2, body, sizeof(body));
+    pkt[2 + sizeof(body)] = ck_a;
+    pkt[2 + sizeof(body) + 1] = ck_b;
+    (void)uart_write_bytes(uart, (const char *)pkt, (int)sizeof(pkt));
+    ESP_LOGI(TAG, "UBX CFG-MSG: NAV-STATUS 1 Hz on UART1 (for diffSoln)");
 }
 
 typedef struct {
@@ -197,7 +281,8 @@ void rtk_task(void *pvParameters)
         .source_clk = UART_SCLK_DEFAULT,
     };
 
-    if (uart_driver_install(CFG_RTK_UART_NUM, 2048, 0, 0, NULL, 0) != ESP_OK) {
+    /* Larger RX for RTCM bursts when corrections are injected on the same UART. */
+    if (uart_driver_install(CFG_RTK_UART_NUM, 8192, 0, 0, NULL, 0) != ESP_OK) {
         ESP_LOGE(TAG, "UART install failed");
     } else if (uart_param_config(CFG_RTK_UART_NUM, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "UART config failed");
@@ -212,6 +297,8 @@ void rtk_task(void *pvParameters)
     /* Disable NMEA on every startup (BK166X PO_NMEA command). */
     (void)uart_flush_input(CFG_RTK_UART_NUM);
     (void)rtk_disable_nmea_output_on_startup(CFG_RTK_UART_NUM);
+    (void)rtk_disable_module_rtcm_output_for_external_injection(CFG_RTK_UART_NUM);
+    rtk_ubx_enable_nav_status_uart1(CFG_RTK_UART_NUM);
 
     ubx_state_t st = UBX_SYNC1;
     uint8_t cls = 0, id = 0;
@@ -308,6 +395,19 @@ void rtk_task(void *pvParameters)
                             uint8_t numsv = payload_head[5];
                             ps.last_navsat_numsv = numsv;
                             telemetry_set_rtk_sat_visible(numsv);
+                        } else if (cls == 0x01 && id == 0x03 && len >= 6 && sizeof(payload_head) >= 6) {
+                            /* UBX-NAV-STATUS: iTOW @0, gpsFix @4, flags @5 (bit0 diffSoln). */
+                            uint32_t itow = rd_u32_le(&payload_head[0]);
+                            uint8_t gps_fix = payload_head[4];
+                            uint8_t flags = payload_head[5];
+                            telemetry_nav_status_t ns = {
+                                .valid = true,
+                                .source = 1u,
+                                .diff_soln = (flags & 0x01u) != 0u,
+                                .gps_fix = gps_fix,
+                                .itow_ms = itow,
+                            };
+                            telemetry_set_nav_status(&ns);
                         } else if (cls == 0x01 && id == 0x07 && len >= 24 && sizeof(payload_head) >= 24) {
                             uint8_t numsv = payload_head[23];
                             if (numsv != ps.last_pvt_numsv) {
@@ -316,13 +416,24 @@ void rtk_task(void *pvParameters)
                             /* "Basic data" (NAV-PVT, u-blox style, len 92). */
                             if (len >= 92 && sizeof(payload_head) >= 92) {
                                 uint32_t iTOW = rd_u32_le(&payload_head[0]);
+                                uint8_t fixType = payload_head[20];
+                                uint8_t pvt_flags = payload_head[21];
+                                /* Many receivers never send NAV-STATUS; mirror diffSoln from NAV-PVT. */
+                                telemetry_nav_status_t ns_pvt = {
+                                    .valid = true,
+                                    .source = 2u,
+                                    .diff_soln = (pvt_flags & 0x02u) != 0u,
+                                    .gps_fix = fixType,
+                                    .itow_ms = iTOW,
+                                };
+                                telemetry_set_nav_status(&ns_pvt);
+
                                 uint16_t year = rd_u16_le(&payload_head[4]);
                                 uint8_t month = payload_head[6];
                                 uint8_t day = payload_head[7];
                                 uint8_t hour = payload_head[8];
                                 uint8_t min = payload_head[9];
                                 uint8_t sec = payload_head[10];
-                                uint8_t fixType = payload_head[20];
                                 int32_t lon = rd_i32_le(&payload_head[24]); /* 1e-7 deg */
                                 int32_t lat = rd_i32_le(&payload_head[28]); /* 1e-7 deg */
                                 int32_t hmsl_mm = rd_i32_le(&payload_head[36]);
@@ -342,6 +453,8 @@ void rtk_task(void *pvParameters)
                                     telemetry_rtk_t r = {
                                         .valid = true,
                                         .fix_type = fixType,
+                                        .fix_quality_code =
+                                            (uint8_t)nav_pvt_to_nmea_quality(fixType, pvt_flags),
                                         .num_sv = numsv,
                                         .num_sv_visible = sat_vis,
                                         .year = year,

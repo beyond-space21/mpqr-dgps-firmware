@@ -6,10 +6,24 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+/** Last differential snapshot from GNSS UART (rtk_task). @ref source identifies origin. */
+typedef struct {
+    bool valid;
+    /** 1 = UBX-NAV-STATUS (0x01 0x03), 2 = UBX-NAV-PVT (0x01 0x07) flags bit1 diffSoln */
+    uint8_t source;
+    /** NAV-STATUS: flags bit0. NAV-PVT: flags bit1 (same semantic: diff corrections used). */
+    bool diff_soln;
+    /** NAV-STATUS: gpsFix byte. NAV-PVT: fixType. */
+    uint8_t gps_fix;
+    uint32_t itow_ms;
+} telemetry_nav_status_t;
+
 /** RTK / GNSS snapshot (written by rtk_task, read by display / network). */
 typedef struct {
     bool valid;
     uint8_t fix_type;
+    /** NMEA GGA-style quality 0–5 (from NAV-PVT); drives WebSocket RTK_fix_status. */
+    uint8_t fix_quality_code;
     uint8_t num_sv;
     /** Visible satellites from NAV-SAT if received; 0 if unknown */
     uint8_t num_sv_visible;
@@ -52,6 +66,7 @@ typedef struct {
     telemetry_battery_t battery;
 
     telemetry_rtk_t rtk;
+    telemetry_nav_status_t nav_status;
 } telemetry_t;
 
 extern SemaphoreHandle_t telemetry_mutex;
@@ -72,5 +87,8 @@ void telemetry_set_rtk(const telemetry_rtk_t *rtk);
 
 /** RTK task: update visible satellite count from NAV-SAT without touching other fields. */
 void telemetry_set_rtk_sat_visible(uint8_t num_visible);
+
+/** RTK task: last UBX-NAV-STATUS (diffSoln, gpsFix, iTOW). */
+void telemetry_set_nav_status(const telemetry_nav_status_t *ns);
 
 #endif

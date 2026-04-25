@@ -9,6 +9,7 @@ set(app_sources
     display/display_touch_cst820.c
     i2c_bus.c
     main.c
+    network/operation_connectivity.c
     network/wifi_manager.c
     network/ws_server.c
     screens/dashboard_screen.c

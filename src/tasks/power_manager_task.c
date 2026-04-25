@@ -4,6 +4,12 @@
  * In CHARGING_MODE, CFG_CHG_GPIO is polled; unplug (HIGH) for 500 ms after a prior plug → shutdown.
  */
 #include "power_manager_task.h"
+#include "app/onboarding_controller.h"
+#include "ble/ble_onboarding_gatt.h"
+#include "network/operation_connectivity.h"
+#include "network/wifi_manager.h"
+#include "network/ws_server.h"
+#include "storage/device_settings.h"
 #include "config.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
@@ -52,6 +58,7 @@ static TickType_t s_chg_high_since_tick;
 
 static void apply_charging_mode(void);
 static void apply_operation_mode(void);
+static void start_operation_network_stack(void);
 static void enter_shutdown(void);
 static void charging_mode_reset_chg_poll(void);
 static void poll_chg_while_charging(void);
@@ -145,21 +152,43 @@ static void charging_mode_reset_chg_poll(void)
     s_chg_saw_low_while_charging = (gpio_get_level(CFG_CHG_GPIO) == 0);
 }
 
+static void start_operation_network_stack(void)
+{
+    (void)ble_onboarding_gatt_start_advertising();
+    if (!device_settings_is_provisioned()) {
+        onboarding_controller_start();
+        ESP_LOGI("POWER", "Onboarding state -> BLE_ADVERTISING (unprovisioned)");
+    }
+    (void)operation_connectivity_on_operation_enter();
+}
+
 static void apply_charging_mode(void)
 {
+    (void)ws_server_stop();
+    if (wifi_manager_is_ready()) {
+        (void)wifi_manager_stop_softap();
+    }
+    (void)ble_onboarding_gatt_stop_advertising();
+    if (s_handles.onboarding != NULL) {
+        vTaskSuspend(s_handles.onboarding);
+    }
     suspend_io_tasks();
     s_display_poll_ms = 8000;
     s_pwr_state = PWR_STATE_CHARGING_MODE;
     charging_mode_reset_chg_poll();
-    ESP_LOGI("POWER", "mode=CHARGING (gyro/fuel/rtk suspended, display slow poll)");
+    ESP_LOGI("POWER", "mode=CHARGING (suspend: onboarding+I/O; stop BLE adv / WiFi / WS; display slow poll)");
 }
 
 static void apply_operation_mode(void)
 {
     resume_io_tasks();
+    if (s_handles.onboarding != NULL) {
+        vTaskResume(s_handles.onboarding);
+    }
     s_display_poll_ms = 500;
     s_pwr_state = PWR_STATE_OPERATION_MODE;
-    ESP_LOGI("POWER", "mode=OPERATION (all I/O tasks running)");
+    ESP_LOGI("POWER", "mode=OPERATION (resume onboarding + I/O; start BLE / network stack)");
+    start_operation_network_stack();
 }
 
 static void enter_shutdown(void)

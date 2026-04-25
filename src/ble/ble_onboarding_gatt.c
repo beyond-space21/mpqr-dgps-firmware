@@ -89,7 +89,8 @@ static void handle_control_line(const char *line)
         ESP_LOGI(TAG, "pair_request received (code=%s)", cmd.code);
         onboarding_status_t st = onboarding_controller_get_status();
         if (device_settings_is_provisioned() && st.state != ONBOARDING_STATE_PAIR_PENDING_CONFIRM) {
-            ESP_LOGI(TAG, "Fast reconnect path: accepting without waiting for UI confirm");
+            ESP_LOGI(TAG, "Fast reconnect: pair_pending_confirm then auto-accept");
+            (void)ble_onboarding_gatt_notify_pair_pending(cmd.code);
             onboarding_controller_confirm_pairing(true);
             return;
         }

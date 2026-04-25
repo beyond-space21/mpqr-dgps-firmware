@@ -50,7 +50,19 @@ void onboarding_task(void *pvParameters)
         const onboarding_status_t st = onboarding_controller_get_status();
         if (st.state != last) {
             ESP_LOGI(TAG, "State transition: %s -> %s", state_name(last), state_name(st.state));
+            const onboarding_state_t prev = last;
             last = st.state;
+
+            /* Every SoftAP handoff must run start + notify logic (e.g. CONNECTED -> SOFTAP_STARTING). */
+            if (st.state == ONBOARDING_STATE_SOFTAP_STARTING) {
+                softap_started = false;
+                softap_notify_pending = false;
+                next_softap_notify_retry = 0;
+            }
+            if (st.state == ONBOARDING_STATE_CONNECTED && prev != ONBOARDING_STATE_CONNECTED) {
+                ESP_LOGI(TAG, "Persisting provisioned flag in NVS");
+                (void)device_settings_set_provisioned(true);
+            }
             if (st.state == ONBOARDING_STATE_FAILED || st.state == ONBOARDING_STATE_BLE_ADVERTISING ||
                 st.state == ONBOARDING_STATE_IDLE) {
                 softap_started = false;
@@ -109,8 +121,6 @@ void onboarding_task(void *pvParameters)
                 }
             }
         } else if (st.state == ONBOARDING_STATE_CONNECTED) {
-            ESP_LOGI(TAG, "Persisting provisioned flag in NVS");
-            (void)device_settings_set_provisioned(true);
             softap_notify_pending = false;
         }
 

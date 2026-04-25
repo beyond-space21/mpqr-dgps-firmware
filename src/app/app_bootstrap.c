@@ -23,10 +23,12 @@ static const char *TAG = "bootstrap";
 
 enum {
     TASK_STACK_DEFAULT = 4096,
-    PRI_POWER = 6,
+    /** Highest: charger/button path must preempt heavy I/O. */
+    PRI_POWER = 8,
+    /** GNSS UART parse + UBX; above gyro/wifi-heavy tasks to reduce RX drop risk. */
+    PRI_RTK = 7,
     PRI_GYRO = 5,
     PRI_FUEL = 5,
-    PRI_RTK = 5,
     PRI_ONBOARDING = 4,
     PRI_DISPLAY = 3,
 };
@@ -82,15 +84,9 @@ void app_bootstrap_start(void)
     vTaskPrioritySet(NULL, saved_prio);
 
     xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, &s_pm_handles.display, 1);
+    xTaskCreatePinnedToCore(onboarding_task, "onboarding", TASK_STACK_DEFAULT, NULL, PRI_ONBOARDING,
+                            &s_pm_handles.onboarding, 1);
     xTaskCreatePinnedToCore(power_manager_task, "power", TASK_STACK_DEFAULT, &s_pm_handles, PRI_POWER, NULL, 1);
-    xTaskCreatePinnedToCore(onboarding_task, "onboarding", TASK_STACK_DEFAULT, NULL, PRI_ONBOARDING, NULL, 1);
 
-    const bool provisioned = device_settings_is_provisioned();
-    (void)ble_onboarding_gatt_start_advertising();
-    if (!provisioned) {
-        onboarding_controller_start();
-        ESP_LOGI(TAG, "Onboarding flow started (device unprovisioned)");
-    } else {
-        ESP_LOGI(TAG, "Provisioned device: BLE advertising enabled for fast reconnect");
-    }
+    ESP_LOGI(TAG, "Worker tasks created; power manager selects CHARGING vs OPERATION");
 }

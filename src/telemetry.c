@@ -62,3 +62,12 @@ void telemetry_set_rtk_sat_visible(uint8_t num_visible)
     s_telemetry.rtk.num_sv_visible = num_visible;
     xSemaphoreGive(telemetry_mutex);
 }
+
+void telemetry_set_nav_status(const telemetry_nav_status_t *ns)
+{
+    if (!ns || xSemaphoreTake(telemetry_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_telemetry.nav_status = *ns;
+    xSemaphoreGive(telemetry_mutex);
+}
