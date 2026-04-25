@@ -263,9 +263,9 @@ static void ws_tx_task(void *arg)
         (void)snprintf(json, sizeof(json),
                        "{\"horizontal_accuracy\":%.3f,\"vertical_accuracy\":%.3f,"
                        "\"RTK_fix_status\":\"%s\",\"lat\":%.7f,\"lng\":%.7f,"
-                       "\"satellites\":%u,\"GGA\":\"%s\"}",
+                       "\"altitude_m\":%.3f,\"satellites\":%u,\"GGA\":\"%s\"}",
                        (double)t.rtk.h_acc_m, (double)t.rtk.v_acc_m, rtk_fix_status(&t.rtk),
-                       (double)t.rtk.lat_deg, (double)t.rtk.lon_deg,
+                       (double)t.rtk.lat_deg, (double)t.rtk.lon_deg, (double)t.rtk.h_msl_m,
                        (unsigned)(t.rtk.num_sv_visible ? t.rtk.num_sv_visible : t.rtk.num_sv),
                        gga_clean);
 
