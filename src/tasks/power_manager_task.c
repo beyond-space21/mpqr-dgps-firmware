@@ -8,7 +8,6 @@
 #include "ble/ble_onboarding_gatt.h"
 #include "network/operation_connectivity.h"
 #include "network/wifi_manager.h"
-#include "network/ws_server.h"
 #include "storage/device_settings.h"
 #include "config.h"
 #include "driver/gpio.h"
@@ -131,6 +130,9 @@ static void suspend_io_tasks(void)
     if (s_handles.rtk != NULL) {
         vTaskSuspend(s_handles.rtk);
     }
+    if (s_handles.ntrip != NULL) {
+        vTaskSuspend(s_handles.ntrip);
+    }
 }
 
 static void resume_io_tasks(void)
@@ -143,6 +145,9 @@ static void resume_io_tasks(void)
     }
     if (s_handles.rtk != NULL) {
         vTaskResume(s_handles.rtk);
+    }
+    if (s_handles.ntrip != NULL) {
+        vTaskResume(s_handles.ntrip);
     }
 }
 
@@ -164,10 +169,7 @@ static void start_operation_network_stack(void)
 
 static void apply_charging_mode(void)
 {
-    (void)ws_server_stop();
-    if (wifi_manager_is_ready()) {
-        (void)wifi_manager_stop_softap();
-    }
+    (void)wifi_manager_stop_sta();
     (void)ble_onboarding_gatt_stop_advertising();
     if (s_handles.onboarding != NULL) {
         vTaskSuspend(s_handles.onboarding);
@@ -176,7 +178,7 @@ static void apply_charging_mode(void)
     s_display_poll_ms = 8000;
     s_pwr_state = PWR_STATE_CHARGING_MODE;
     charging_mode_reset_chg_poll();
-    ESP_LOGI("POWER", "mode=CHARGING (suspend: onboarding+I/O; stop BLE adv / WiFi / WS; display slow poll)");
+    ESP_LOGI("POWER", "mode=CHARGING (suspend: onboarding+I/O; stop BLE adv / Wi-Fi; display slow poll)");
 }
 
 static void apply_operation_mode(void)

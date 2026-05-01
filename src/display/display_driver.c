@@ -11,8 +11,10 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include <string.h>
 
 static const char *TAG = "display_driver";
 
@@ -62,6 +64,7 @@ static const co5300_lcd_init_cmd_t lcd_init_cmds[] = {
 #define LCD_QSPI_PCLK_HZ (30 * 1000 * 1000)
 #define LVGL_TICK_PERIOD_MS 2
 #define LVGL_BUF_LINES 40
+#define LCD_DMA_BOUNCE_LINES 12
 
 #define LCD_HOST SPI2_HOST
 
@@ -70,7 +73,9 @@ static lv_disp_draw_buf_t s_lvgl_draw_buf;
 static lv_disp_drv_t s_disp_drv;
 static lv_color_t *s_lvgl_buf1;
 static lv_color_t *s_lvgl_buf2;
+static lv_color_t *s_dma_bounce_buf;
 static uint16_t *s_clear_line_buf;
+static SemaphoreHandle_t s_lcd_flush_done_sem;
 
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io,
                                     esp_lcd_panel_io_event_data_t *edata,
@@ -78,8 +83,14 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io,
 {
     (void)panel_io;
     (void)edata;
-    lv_disp_drv_t *drv = (lv_disp_drv_t *)user_ctx;
-    lv_disp_flush_ready(drv);
+    SemaphoreHandle_t sem = (SemaphoreHandle_t)user_ctx;
+    BaseType_t hp_task_woken = pdFALSE;
+    if (sem != NULL) {
+        xSemaphoreGiveFromISR(sem, &hp_task_woken);
+    }
+    if (hp_task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
     return false;
 }
 
@@ -99,9 +110,33 @@ static void clear_panel_solid(uint16_t color565)
 
 static void lvgl_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_map)
 {
-    (void)disp_drv;
-    ESP_ERROR_CHECK(
-        esp_lcd_panel_draw_bitmap(s_panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, color_map));
+    const int area_w = area->x2 - area->x1 + 1;
+    const int area_h = area->y2 - area->y1 + 1;
+    const size_t bytes_per_pixel = sizeof(lv_color_t);
+
+    if (s_lcd_flush_done_sem != NULL) {
+        while (xSemaphoreTake(s_lcd_flush_done_sem, 0) == pdTRUE) {
+        }
+    }
+
+    int row = 0;
+    while (row < area_h) {
+        int chunk_rows = area_h - row;
+        if (chunk_rows > LCD_DMA_BOUNCE_LINES) {
+            chunk_rows = LCD_DMA_BOUNCE_LINES;
+        }
+        const size_t chunk_pixels = (size_t)area_w * (size_t)chunk_rows;
+        const lv_color_t *chunk_src = color_map + ((size_t)row * (size_t)area_w);
+        memcpy(s_dma_bounce_buf, chunk_src, chunk_pixels * bytes_per_pixel);
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel_handle, area->x1, area->y1 + row,
+                                                  area->x2 + 1, area->y1 + row + chunk_rows,
+                                                  s_dma_bounce_buf));
+        if (s_lcd_flush_done_sem != NULL) {
+            (void)xSemaphoreTake(s_lcd_flush_done_sem, pdMS_TO_TICKS(100));
+        }
+        row += chunk_rows;
+    }
+    lv_disp_flush_ready(disp_drv);
 }
 
 static void lvgl_tick_cb(void *arg)
@@ -150,10 +185,20 @@ esp_err_t display_driver_init(void)
     lv_init();
 
     const size_t lvgl_buf_pixels = DISP_HOR_RES * LVGL_BUF_LINES;
-    s_lvgl_buf1 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    s_lvgl_buf2 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    s_lvgl_buf1 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_lvgl_buf1 == NULL) {
+        s_lvgl_buf1 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    s_lvgl_buf2 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_lvgl_buf2 == NULL) {
+        s_lvgl_buf2 = heap_caps_malloc(lvgl_buf_pixels * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    s_dma_bounce_buf = heap_caps_malloc(DISP_HOR_RES * LCD_DMA_BOUNCE_LINES * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    s_lcd_flush_done_sem = xSemaphoreCreateBinary();
     ESP_ERROR_CHECK(s_lvgl_buf1 ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(s_lvgl_buf2 ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(s_dma_bounce_buf ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(s_lcd_flush_done_sem ? ESP_OK : ESP_ERR_NO_MEM);
     lv_disp_draw_buf_init(&s_lvgl_draw_buf, s_lvgl_buf1, s_lvgl_buf2, lvgl_buf_pixels);
 
     lv_disp_drv_init(&s_disp_drv);
@@ -164,7 +209,7 @@ esp_err_t display_driver_init(void)
     s_disp_drv.full_refresh = 0;
 
     const esp_lcd_panel_io_callbacks_t cbs = {.on_color_trans_done = notify_lvgl_flush_ready};
-    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, &s_disp_drv));
+    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, s_lcd_flush_done_sem));
     lv_disp_drv_register(&s_disp_drv);
 
     ESP_ERROR_CHECK(display_touch_cst820_init());

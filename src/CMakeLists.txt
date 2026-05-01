@@ -10,8 +10,8 @@ set(app_sources
     i2c_bus.c
     main.c
     network/operation_connectivity.c
+    network/rtcm_forward.c
     network/wifi_manager.c
-    network/ws_server.c
     screens/dashboard_screen.c
     storage/device_settings.c
     tasks/display_task.c
@@ -35,7 +35,6 @@ idf_component_register(
              esp_driver_i2c
              esp_driver_uart
              esp_event
-             esp_http_server
              esp_lcd
              esp_lcd_co5300
              esp_lcd_touch_cst820

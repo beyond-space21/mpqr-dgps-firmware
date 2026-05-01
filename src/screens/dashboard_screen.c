@@ -117,12 +117,12 @@ void dashboard_screen_render_operation(dashboard_screen_t *screen, const telemet
 
     char text[320];
     snprintf(text, sizeof(text),
-             "IMU valid: %s\nYaw: %.1f  Roll: %.1f  Pitch: %.1f\n\nBattery valid: %s\nSOC: %.1f%%  Voltage: %u mV\nCurrent: %d mA\n\nRTK valid: %s\nFix: %u  SV: %u/%u\nLat: %.7f\nLon: %.7f",
+             "IMU valid: %s\nYaw: %.1f  Roll: %.1f  Pitch: %.1f\n\nBattery valid: %s\nSOC: %.1f%%  Voltage: %u mV\nCurrent: %d mA\n\nRTK valid: %s\nFix: %s  SV: %u/%u\nLat: %.7f\nLon: %.7f",
              telemetry->imu_valid ? "yes" : "no", (double)telemetry->imu_yaw_deg,
              (double)telemetry->imu_roll_deg, (double)telemetry->imu_pitch_deg,
              telemetry->battery.valid ? "yes" : "no", (double)telemetry->battery.soc_percent,
              (unsigned)telemetry->battery.voltage_mv, (int)telemetry->battery.current_ma, telemetry->rtk.valid ? "yes" : "no",
-             (unsigned)telemetry->rtk.fix_type, (unsigned)telemetry->rtk.num_sv,
+             telemetry_rtk_quality_str(&telemetry->rtk), (unsigned)telemetry->rtk.num_sv,
              (unsigned)telemetry->rtk.num_sv_visible, (double)telemetry->rtk.lat_deg,
              (double)telemetry->rtk.lon_deg);
 

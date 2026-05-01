@@ -5,9 +5,11 @@
 #include "telemetry.h"
 #include "esp_log.h"
 #include "driver/uart.h"
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "rtk_task";
@@ -125,6 +127,264 @@ static void build_gga_from_nav_pvt(const uint8_t *pvt, uint8_t num_sv, char *out
     snprintf(out, out_len, "$%s*%02X\r\n", body, (unsigned)ck);
 }
 
+typedef struct {
+    bool saw_valid_ubx;
+    uint8_t last_navsat_numsv;
+    uint8_t last_pvt_numsv;
+    uint32_t last_pvt_itow_ms;
+} rtk_parse_state_t;
+
+typedef struct {
+    bool have_time;
+    bool have_date;
+    bool have_speed_course;
+    bool have_pdop;
+    bool have_gsa_hdop;
+    bool have_gsa_vdop;
+    bool have_sat_visible;
+    uint8_t hour;
+    uint8_t min;
+    uint8_t sec;
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    float speed_m_s;
+    float heading_deg;
+    float pdop;
+    float gsa_hdop;
+    float gsa_vdop;
+    uint8_t sat_visible;
+} nmea_state_t;
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    c = (char)toupper((unsigned char)c);
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool nmea_parse_hhmmss(const char *s, uint8_t *hh, uint8_t *mm, uint8_t *ss)
+{
+    if (!s || strlen(s) < 6 || !isdigit((unsigned char)s[0]) || !isdigit((unsigned char)s[1]) ||
+        !isdigit((unsigned char)s[2]) || !isdigit((unsigned char)s[3]) ||
+        !isdigit((unsigned char)s[4]) || !isdigit((unsigned char)s[5])) {
+        return false;
+    }
+    *hh = (uint8_t)((s[0] - '0') * 10 + (s[1] - '0'));
+    *mm = (uint8_t)((s[2] - '0') * 10 + (s[3] - '0'));
+    *ss = (uint8_t)((s[4] - '0') * 10 + (s[5] - '0'));
+    return true;
+}
+
+static bool nmea_parse_ddmmyy(const char *s, uint16_t *year, uint8_t *month, uint8_t *day)
+{
+    if (!s || strlen(s) < 6 || !isdigit((unsigned char)s[0]) || !isdigit((unsigned char)s[1]) ||
+        !isdigit((unsigned char)s[2]) || !isdigit((unsigned char)s[3]) ||
+        !isdigit((unsigned char)s[4]) || !isdigit((unsigned char)s[5])) {
+        return false;
+    }
+    *day = (uint8_t)((s[0] - '0') * 10 + (s[1] - '0'));
+    *month = (uint8_t)((s[2] - '0') * 10 + (s[3] - '0'));
+    uint8_t yy = (uint8_t)((s[4] - '0') * 10 + (s[5] - '0'));
+    *year = (yy >= 80u) ? (uint16_t)(1900u + yy) : (uint16_t)(2000u + yy);
+    return true;
+}
+
+static bool nmea_parse_latlon(const char *val, const char *hemi, bool is_lat, float *deg_out)
+{
+    if (!val || !hemi || !*val || !*hemi) {
+        return false;
+    }
+    char *endp = NULL;
+    double raw = strtod(val, &endp);
+    if (endp == val) {
+        return false;
+    }
+    (void)is_lat;
+    int deg = (int)(raw / 100.0);
+    double min = raw - ((double)deg * 100.0);
+    double dec_deg = (double)deg + (min / 60.0);
+    char h = (char)toupper((unsigned char)hemi[0]);
+    if (h == 'S' || h == 'W') {
+        dec_deg = -dec_deg;
+    }
+    *deg_out = (float)dec_deg;
+    return true;
+}
+
+static void nmea_publish_fix(const char *gga_sentence, uint8_t fix_quality, uint8_t num_sv,
+                             float hdop, float alt_m, float lat_deg, float lon_deg,
+                             rtk_parse_state_t *ps, nmea_state_t *ns)
+{
+    uint8_t fix_type = 0;
+    if (fix_quality == 0u) {
+        fix_type = 0u;
+    } else if (fix_quality >= 4u) {
+        fix_type = 3u;
+    } else if (fix_quality >= 1u) {
+        fix_type = 2u;
+    }
+
+    telemetry_nav_status_t nav = {
+        .valid = true,
+        .source = 3u, /* NMEA-derived */
+        .diff_soln = (fix_quality >= 2u),
+        .gps_fix = fix_type,
+        .itow_ms = ps->last_pvt_itow_ms + 1000u,
+    };
+    ps->last_pvt_itow_ms = nav.itow_ms;
+    telemetry_set_nav_status(&nav);
+
+    telemetry_rtk_t r = {0};
+    r.valid = true;
+    r.fix_type = fix_type;
+    r.fix_quality_code = fix_quality;
+    r.num_sv = num_sv;
+    r.num_sv_visible = ns->have_sat_visible ? ns->sat_visible : num_sv;
+    r.hour = ns->have_time ? ns->hour : 0u;
+    r.min = ns->have_time ? ns->min : 0u;
+    r.sec = ns->have_time ? ns->sec : 0u;
+    r.year = ns->have_date ? ns->year : 0u;
+    r.month = ns->have_date ? ns->month : 0u;
+    r.day = ns->have_date ? ns->day : 0u;
+    r.lat_deg = lat_deg;
+    r.lon_deg = lon_deg;
+    r.h_msl_m = alt_m;
+    r.h_acc_m = 0.0f;
+    r.v_acc_m = 0.0f;
+    r.g_speed_m_s = ns->have_speed_course ? ns->speed_m_s : 0.0f;
+    r.heading_deg = ns->have_speed_course ? ns->heading_deg : 0.0f;
+    r.vel_n = 0.0f;
+    r.vel_e = 0.0f;
+    r.vel_d = 0.0f;
+    r.pdop = ns->have_pdop ? ns->pdop : hdop;
+    (void)strncpy(r.gga, gga_sentence, sizeof(r.gga) - 1);
+    telemetry_set_rtk(&r);
+}
+
+static void nmea_process_sentence(char *line, rtk_parse_state_t *ps, nmea_state_t *ns)
+{
+    if (!line || line[0] != '$') {
+        return;
+    }
+    char *star = strchr(line, '*');
+    if (!star || (star - line) < 2 || strlen(star) < 3) {
+        return;
+    }
+    uint8_t ck = 0;
+    for (char *p = line + 1; p < star; p++) {
+        ck ^= (uint8_t)(*p);
+    }
+    int hi = hex_nibble(star[1]);
+    int lo = hex_nibble(star[2]);
+    if (hi < 0 || lo < 0) {
+        return;
+    }
+    uint8_t got_ck = (uint8_t)((hi << 4) | lo);
+    if (got_ck != ck) {
+        return;
+    }
+    char validated_sentence[160];
+    snprintf(validated_sentence, sizeof(validated_sentence), "%s\r\n", line);
+    *star = '\0';
+
+    char *fields[24] = {0};
+    int n_fields = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(line + 1, ",", &save); tok && n_fields < 24;
+         tok = strtok_r(NULL, ",", &save)) {
+        fields[n_fields++] = tok;
+    }
+    if (n_fields <= 0 || !fields[0] || strlen(fields[0]) < 5) {
+        return;
+    }
+    const char *type = fields[0] + 2; /* GPxxx/GNxxx -> xxx */
+
+    if (strcmp(type, "RMC") == 0) {
+        if (n_fields > 1) {
+            uint8_t hh, mm, ss;
+            if (nmea_parse_hhmmss(fields[1], &hh, &mm, &ss)) {
+                ns->hour = hh;
+                ns->min = mm;
+                ns->sec = ss;
+                ns->have_time = true;
+            }
+        }
+        if (n_fields > 7 && fields[7] && *fields[7]) {
+            ns->speed_m_s = (float)(strtod(fields[7], NULL) * 0.514444);
+            ns->have_speed_course = true;
+        }
+        if (n_fields > 8 && fields[8] && *fields[8]) {
+            ns->heading_deg = (float)strtod(fields[8], NULL);
+            ns->have_speed_course = true;
+        }
+        if (n_fields > 9) {
+            uint16_t year;
+            uint8_t month, day;
+            if (nmea_parse_ddmmyy(fields[9], &year, &month, &day)) {
+                ns->year = year;
+                ns->month = month;
+                ns->day = day;
+                ns->have_date = true;
+            }
+        }
+    } else if (strcmp(type, "GSA") == 0) {
+        /* $--GSA: f[15]=PDOP, f[16]=HDOP, f[17]=VDOP (after talker+msg token). */
+        if (n_fields > 15 && fields[15] && *fields[15]) {
+            ns->pdop = (float)strtod(fields[15], NULL);
+            ns->have_pdop = true;
+        }
+        if (n_fields > 16 && fields[16] && *fields[16]) {
+            ns->gsa_hdop = (float)strtod(fields[16], NULL);
+            ns->have_gsa_hdop = true;
+        }
+        if (n_fields > 17 && fields[17] && *fields[17]) {
+            ns->gsa_vdop = (float)strtod(fields[17], NULL);
+            ns->have_gsa_vdop = true;
+        }
+    } else if (strcmp(type, "GSV") == 0) {
+        if (n_fields > 3 && fields[3] && *fields[3]) {
+            long vis = strtol(fields[3], NULL, 10);
+            if (vis >= 0 && vis <= 255) {
+                ns->sat_visible = (uint8_t)vis;
+                ns->have_sat_visible = true;
+                telemetry_set_rtk_sat_visible(ns->sat_visible);
+            }
+        }
+    } else if (strcmp(type, "GGA") == 0) {
+        if (n_fields < 10) {
+            return;
+        }
+        uint8_t hh, mm, ss;
+        if (nmea_parse_hhmmss(fields[1], &hh, &mm, &ss)) {
+            ns->hour = hh;
+            ns->min = mm;
+            ns->sec = ss;
+            ns->have_time = true;
+        }
+        float lat_deg = 0.0f, lon_deg = 0.0f;
+        if (!nmea_parse_latlon(fields[2], fields[3], true, &lat_deg) ||
+            !nmea_parse_latlon(fields[4], fields[5], false, &lon_deg)) {
+            return;
+        }
+        long q = strtol(fields[6], NULL, 10);
+        long sv = strtol(fields[7], NULL, 10);
+        float hdop = (fields[8] && *fields[8]) ? (float)strtod(fields[8], NULL) : 0.0f;
+        float alt_m = (fields[9] && *fields[9]) ? (float)strtod(fields[9], NULL) : 0.0f;
+        if (q < 0 || q > 255 || sv < 0 || sv > 255) {
+            return;
+        }
+        ps->saw_valid_ubx = true; /* suppress "no UBX" startup note when NMEA is flowing */
+        nmea_publish_fix(validated_sentence, (uint8_t)q, (uint8_t)sv, hdop, alt_m, lat_deg, lon_deg,
+                         ps, ns);
+    }
+}
+
 typedef enum {
     UBX_SYNC1,
     UBX_SYNC2,
@@ -136,137 +396,6 @@ typedef enum {
     UBX_CK_A,
     UBX_CK_B,
 } ubx_state_t;
-
-static esp_err_t po_wait_ok_fail(uart_port_t uart, int timeout_ms)
-{
-    /* BK166X spec §5.1: reply is "$OK" or "$FAIL" (line-terminated). UBX binary on the
-     * same UART has no newlines for long stretches; a fixed line buffer can wrap and
-     * drop a "$OK" that sits after binary. Match $OK / $FAIL as subsequences instead. */
-    typedef enum {
-        PO_IDLE,
-        PO_DOLLAR,
-        PO_OK_O,
-        PO_OK_K,
-        PO_FAIL_F,
-        PO_FAIL_A,
-        PO_FAIL_I,
-        PO_FAIL_L,
-    } po_ack_st_t;
-
-    po_ack_st_t st = PO_IDLE;
-    uint8_t b = 0;
-    int waited_ms = 0;
-
-    while (waited_ms < timeout_ms) {
-        int n = uart_read_bytes(uart, &b, 1, pdMS_TO_TICKS(20));
-        waited_ms += 20;
-        if (n <= 0) {
-            continue;
-        }
-
-        switch (st) {
-        case PO_IDLE:
-            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
-            break;
-        case PO_DOLLAR:
-            if (b == 'O') {
-                st = PO_OK_O;
-            } else if (b == 'F') {
-                st = PO_FAIL_F;
-            } else {
-                st = (b == '$') ? PO_DOLLAR : PO_IDLE;
-            }
-            break;
-        case PO_OK_O:
-            st = (b == 'K') ? PO_OK_K : ((b == '$') ? PO_DOLLAR : PO_IDLE);
-            break;
-        case PO_OK_K:
-            if (b == '\r' || b == '\n') {
-                return ESP_OK;
-            }
-            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
-            break;
-        case PO_FAIL_F:
-            st = (b == 'A') ? PO_FAIL_A : ((b == '$') ? PO_DOLLAR : PO_IDLE);
-            break;
-        case PO_FAIL_A:
-            st = (b == 'I') ? PO_FAIL_I : ((b == '$') ? PO_DOLLAR : PO_IDLE);
-            break;
-        case PO_FAIL_I:
-            st = (b == 'L') ? PO_FAIL_L : ((b == '$') ? PO_DOLLAR : PO_IDLE);
-            break;
-        case PO_FAIL_L:
-            if (b == '\r' || b == '\n') {
-                return ESP_FAIL;
-            }
-            st = (b == '$') ? PO_DOLLAR : PO_IDLE;
-            break;
-        }
-    }
-    return ESP_ERR_TIMEOUT;
-}
-
-static esp_err_t rtk_disable_nmea_output_on_startup(uart_port_t uart)
-{
-    /* BK166X spec §5.7: "$POLCFGMSG,1,0" => disable all NMEA messages. */
-    static const char cmd[] = "$POLCFGMSG,1,0\r\n";
-    uart_write_bytes(uart, cmd, sizeof(cmd) - 1);
-    esp_err_t err = po_wait_ok_fail(uart, 500);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "BK166X: NMEA disabled ($OK)");
-    } else {
-        ESP_LOGW(TAG, "BK166X: NMEA disable did not return $OK: %s", esp_err_to_name(err));
-    }
-    return err;
-}
-
-/**
- * BK166X $POLCFGRTCM,msmType,msmRate,ephFlag: msmRate 0 disables RTCM output from the
- * module on this UART so externally injected RTCM (e.g. WebSocket binary → UART) is
- * not interleaved with self-generated RTCM.
- */
-static esp_err_t rtk_disable_module_rtcm_output_for_external_injection(uart_port_t uart)
-{
-    static const char cmd[] = "$POLCFGRTCM,0,0,0\r\n";
-    uart_write_bytes(uart, cmd, sizeof(cmd) - 1);
-    esp_err_t err = po_wait_ok_fail(uart, 500);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "BK166X: module RTCM TX off; UART for external RTCM ($OK)");
-    } else {
-        ESP_LOGW(TAG, "BK166X: POLCFGRTCM (disable module RTCM out) no $OK: %s",
-                 esp_err_to_name(err));
-    }
-    return err;
-}
-
-/** UBX-CFG-MSG: enable NAV-STATUS (0x01 0x03) at 1 Hz on UART1 (u-blox-style). */
-static void rtk_ubx_enable_nav_status_uart1(uart_port_t uart)
-{
-    static const uint8_t body[] = {
-        0x06, 0x01, 0x08, 0x00, /* CFG-MSG, len 8 */
-        0x01, 0x03,             /* NAV-STATUS */
-        0x00, 0x01, 0x00, 0x00, 0x00, 0x00 /* I2C, UART1, UART2, USB, SPI */
-    };
-    uint8_t ck_a = 0, ck_b = 0;
-    for (size_t i = 0; i < sizeof(body); i++) {
-        ubx_ck_update(body[i], &ck_a, &ck_b);
-    }
-    uint8_t pkt[2 + sizeof(body) + 2];
-    pkt[0] = 0xB5;
-    pkt[1] = 0x62;
-    memcpy(pkt + 2, body, sizeof(body));
-    pkt[2 + sizeof(body)] = ck_a;
-    pkt[2 + sizeof(body) + 1] = ck_b;
-    (void)uart_write_bytes(uart, (const char *)pkt, (int)sizeof(pkt));
-    ESP_LOGI(TAG, "UBX CFG-MSG: NAV-STATUS 1 Hz on UART1 (for diffSoln)");
-}
-
-typedef struct {
-    bool saw_valid_ubx;
-    uint8_t last_navsat_numsv;
-    uint8_t last_pvt_numsv;
-    uint32_t last_pvt_itow_ms;
-} rtk_parse_state_t;
 
 void rtk_task(void *pvParameters)
 {
@@ -294,11 +423,8 @@ void rtk_task(void *pvParameters)
                  CFG_RTK_UART_BAUD);
     }
 
-    /* Disable NMEA on every startup (BK166X PO_NMEA command). */
+    /* Keep module defaults on startup: NMEA stays enabled (primary output mode). */
     (void)uart_flush_input(CFG_RTK_UART_NUM);
-    (void)rtk_disable_nmea_output_on_startup(CFG_RTK_UART_NUM);
-    (void)rtk_disable_module_rtcm_output_for_external_injection(CFG_RTK_UART_NUM);
-    rtk_ubx_enable_nav_status_uart1(CFG_RTK_UART_NUM);
 
     ubx_state_t st = UBX_SYNC1;
     uint8_t cls = 0, id = 0;
@@ -310,10 +436,15 @@ void rtk_task(void *pvParameters)
 
     rtk_parse_state_t ps = {0};
     uint32_t startup_deadline_ms = 2000;
+    bool startup_ubx_notice_emitted = false;
     uint32_t waited_ms = 0;
 
     /* Store first bytes of payload for summaries we care about. */
     uint8_t payload_head[96];
+    nmea_state_t nmea = {0};
+    char nmea_line[160];
+    size_t nmea_line_len = 0;
+    bool nmea_collect = false;
 
     uint8_t buf[256];
     while (1) {
@@ -322,6 +453,23 @@ void rtk_task(void *pvParameters)
         if (n > 0) {
             for (int i = 0; i < n; i++) {
                 uint8_t b = buf[i];
+                if (b == '$') {
+                    nmea_collect = true;
+                    nmea_line_len = 0;
+                    nmea_line[nmea_line_len++] = (char)b;
+                } else if (nmea_collect) {
+                    if (b == '\n' || b == '\r') {
+                        nmea_line[nmea_line_len] = '\0';
+                        nmea_process_sentence(nmea_line, &ps, &nmea);
+                        nmea_collect = false;
+                        nmea_line_len = 0;
+                    } else if (nmea_line_len < (sizeof(nmea_line) - 1)) {
+                        nmea_line[nmea_line_len++] = (char)b;
+                    } else {
+                        nmea_collect = false;
+                        nmea_line_len = 0;
+                    }
+                }
 
                 switch (st) {
                 case UBX_SYNC1:
@@ -501,11 +649,12 @@ void rtk_task(void *pvParameters)
         }
 
         /* After startup config: ensure we actually see UBX. */
-        if (!ps.saw_valid_ubx && waited_ms >= startup_deadline_ms) {
-            ESP_LOGW(TAG, "No valid UBX seen within %u ms after NMEA-disable ($OK seen? check wiring/baud/output)",
+        if (!ps.saw_valid_ubx && !startup_ubx_notice_emitted && waited_ms >= startup_deadline_ms) {
+            ESP_LOGI(TAG,
+                     "No valid UBX seen within initial %u ms; running with NMEA-primary startup",
                      (unsigned)startup_deadline_ms);
-            /* Avoid repeating forever. */
-            ps.saw_valid_ubx = true;
+            /* Emit this startup note once; UBX may still arrive later. */
+            startup_ubx_notice_emitted = true;
         }
     }
 }

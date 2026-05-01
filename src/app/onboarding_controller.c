@@ -73,18 +73,18 @@ void onboarding_controller_confirm_pairing(bool accepted)
     status_lock();
     s_status.requires_user_confirm = false;
     memset(&s_confirm_deadline, 0, sizeof(s_confirm_deadline));
-    s_status.state = accepted ? ONBOARDING_STATE_SOFTAP_STARTING : ONBOARDING_STATE_FAILED;
+    s_status.state = accepted ? ONBOARDING_STATE_LINK_STARTING : ONBOARDING_STATE_FAILED;
     ESP_LOGI(TAG, "Pair confirmation result: %s -> state=%s",
              accepted ? "accepted" : "rejected",
-             accepted ? "SOFTAP_STARTING" : "FAILED");
+             accepted ? "LINK_STARTING" : "FAILED");
     status_unlock();
 }
 
-void onboarding_controller_mark_softap_ready(void)
+void onboarding_controller_mark_link_ready(void)
 {
     status_lock();
-    s_status.state = ONBOARDING_STATE_SOFTAP_READY;
-    ESP_LOGI(TAG, "State -> SOFTAP_READY");
+    s_status.state = ONBOARDING_STATE_LINK_READY;
+    ESP_LOGI(TAG, "State -> LINK_READY");
     status_unlock();
 }
 
@@ -92,7 +92,7 @@ void onboarding_controller_mark_connected(void)
 {
     status_lock();
     s_status.state = ONBOARDING_STATE_CONNECTED;
-    ESP_LOGI(TAG, "State -> CONNECTED (app acknowledged wifi)");
+    ESP_LOGI(TAG, "State -> CONNECTED");
     status_unlock();
 }
 

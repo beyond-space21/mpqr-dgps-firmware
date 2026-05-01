@@ -49,11 +49,11 @@ void app_controller_update(app_controller_t *app)
                 (void)snprintf(detail, sizeof(detail), "Confirm code on device: %s", onboarding.code);
                 dashboard_screen_render_onboarding(app->dashboard, "Pair Confirmation", detail);
                 break;
-            case ONBOARDING_STATE_SOFTAP_STARTING:
-                dashboard_screen_render_onboarding(app->dashboard, "Wi-Fi Setup", "Starting temporary access point");
+            case ONBOARDING_STATE_LINK_STARTING:
+                dashboard_screen_render_onboarding(app->dashboard, "BLE Link Setup", "Preparing BLE data link");
                 break;
-            case ONBOARDING_STATE_SOFTAP_READY:
-                dashboard_screen_render_onboarding(app->dashboard, "Wi-Fi Ready", "App can connect to device SoftAP");
+            case ONBOARDING_STATE_LINK_READY:
+                dashboard_screen_render_onboarding(app->dashboard, "BLE Link Ready", "Telemetry and status over BLE");
                 break;
             case ONBOARDING_STATE_FAILED:
                 dashboard_screen_render_onboarding(app->dashboard, "Onboarding Failed", "Retry pairing from app");

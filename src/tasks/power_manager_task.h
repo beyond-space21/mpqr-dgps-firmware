@@ -11,6 +11,7 @@ typedef struct {
     TaskHandle_t gyro;
     TaskHandle_t fuel;
     TaskHandle_t rtk;
+    TaskHandle_t ntrip;
     TaskHandle_t display;
     TaskHandle_t onboarding;
 } power_manager_handles_t;

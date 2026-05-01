@@ -30,6 +30,19 @@
 #define CFG_RTK_UART_BAUD           115200
 
 /* NTRIP corrections → forwarded to RTK on same UART as configured in rtk_task */
+#define CFG_WIFI_STA_SSID            "bluvern"
+#define CFG_WIFI_STA_PASSWORD        "Texas@3467"
+#define CFG_WIFI_RECONNECT_MS        5000
+
+#define CFG_NTRIP_HOST               "103.206.29.4"
+#define CFG_NTRIP_PORT               2105
+#define CFG_NTRIP_MOUNTPOINT         "IVRS"
+#define CFG_NTRIP_USERNAME           "kvm12012000"
+#define CFG_NTRIP_PASSWORD           "cors@2022"
+#define CFG_NTRIP_TLS                0
+#define CFG_NTRIP_RECONNECT_MS       5000
+/** Send last known NMEA GGA to caster on this interval (for VRS / network-RTK). 0 = disabled. */
+#define CFG_NTRIP_SEND_GGA_MS        10000
 
 /* Colour OLED over QSPI — placeholder pins (use SPI2_HOST when wiring display) */
 #define CFG_DISPLAY_CS_GPIO         10

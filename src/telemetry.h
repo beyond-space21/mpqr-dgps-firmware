@@ -56,6 +56,32 @@ typedef struct {
     int16_t current_ma;
 } telemetry_battery_t;
 
+typedef enum {
+    TELEMETRY_WIFI_OFF = 0,
+    TELEMETRY_WIFI_CONNECTING,
+    TELEMETRY_WIFI_CONNECTED,
+    TELEMETRY_WIFI_FAILED,
+} telemetry_wifi_state_t;
+
+typedef struct {
+    telemetry_wifi_state_t state;
+    char ssid[33];
+    char ip[16];
+} telemetry_wifi_t;
+
+typedef enum {
+    TELEMETRY_NTRIP_DISCONNECTED = 0,
+    TELEMETRY_NTRIP_CONNECTING,
+    TELEMETRY_NTRIP_STREAMING,
+    TELEMETRY_NTRIP_AUTH_FAILED,
+    TELEMETRY_NTRIP_ERROR,
+} telemetry_ntrip_state_t;
+
+typedef struct {
+    telemetry_ntrip_state_t state;
+    char last_error[64];
+} telemetry_ntrip_t;
+
 /** Central sensor / state store; protected by @ref telemetry_mutex */
 typedef struct {
     float imu_yaw_deg;
@@ -67,11 +93,16 @@ typedef struct {
 
     telemetry_rtk_t rtk;
     telemetry_nav_status_t nav_status;
+    telemetry_wifi_t wifi;
+    telemetry_ntrip_t ntrip;
 } telemetry_t;
 
 extern SemaphoreHandle_t telemetry_mutex;
 
 void telemetry_init(void);
+
+/** GGA-style @ref telemetry_rtk_t.fix_quality_code → same labels as BLE `RTK_fix_status`. */
+const char *telemetry_rtk_quality_str(const telemetry_rtk_t *rtk);
 
 /** Copy current telemetry under mutex (safe from any task). */
 void telemetry_get_copy(telemetry_t *out);
@@ -90,5 +121,8 @@ void telemetry_set_rtk_sat_visible(uint8_t num_visible);
 
 /** RTK task: last UBX-NAV-STATUS (diffSoln, gpsFix, iTOW). */
 void telemetry_set_nav_status(const telemetry_nav_status_t *ns);
+
+void telemetry_set_wifi(const telemetry_wifi_t *wifi);
+void telemetry_set_ntrip(const telemetry_ntrip_t *ntrip);
 
 #endif

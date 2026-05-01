@@ -11,6 +11,10 @@ void app_main(void)
     esp_log_level_set("wifi", ESP_LOG_WARN);
     esp_log_level_set("wifi_init", ESP_LOG_WARN);
 
+    /* Suppress routine GATT/adv noise; Wi‑Fi/NTRIP use `wifi:` / `ntrip:` log lines from their tasks. */
+    esp_log_level_set("NimBLE", ESP_LOG_NONE);
+    esp_log_level_set("BLE_INIT", ESP_LOG_WARN);
+
     ESP_LOGI(TAG, "DGPS init");
     app_bootstrap_start();
 

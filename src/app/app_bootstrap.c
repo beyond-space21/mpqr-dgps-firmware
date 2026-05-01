@@ -15,6 +15,7 @@
 #include "tasks/display_task.h"
 #include "tasks/fuel_gauge_task.h"
 #include "tasks/gyro_task.h"
+#include "tasks/ntrip_task.h"
 #include "tasks/onboarding_task.h"
 #include "tasks/power_manager_task.h"
 #include "tasks/rtk_task.h"
@@ -27,6 +28,7 @@ enum {
     PRI_POWER = 8,
     /** GNSS UART parse + UBX; above gyro/wifi-heavy tasks to reduce RX drop risk. */
     PRI_RTK = 7,
+    PRI_NTRIP = 6,
     PRI_GYRO = 5,
     PRI_FUEL = 5,
     PRI_ONBOARDING = 4,
@@ -81,6 +83,8 @@ void app_bootstrap_start(void)
     vTaskSuspend(s_pm_handles.fuel);
     xTaskCreatePinnedToCore(rtk_task, "rtk", TASK_STACK_DEFAULT, NULL, PRI_RTK, &s_pm_handles.rtk, 1);
     vTaskSuspend(s_pm_handles.rtk);
+    xTaskCreatePinnedToCore(ntrip_task, "ntrip", TASK_STACK_DEFAULT, NULL, PRI_NTRIP, &s_pm_handles.ntrip, 1);
+    vTaskSuspend(s_pm_handles.ntrip);
     vTaskPrioritySet(NULL, saved_prio);
 
     xTaskCreatePinnedToCore(display_task, "display", TASK_STACK_DEFAULT, NULL, PRI_DISPLAY, &s_pm_handles.display, 1);

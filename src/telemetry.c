@@ -3,6 +3,29 @@
 
 SemaphoreHandle_t telemetry_mutex;
 
+const char *telemetry_rtk_quality_str(const telemetry_rtk_t *rtk)
+{
+    if (rtk == NULL || !rtk->valid) {
+        return "No fix";
+    }
+    switch (rtk->fix_quality_code) {
+        case 0:
+            return "No fix";
+        case 1:
+            return "GPS fix";
+        case 2:
+            return "DGPS fix";
+        case 3:
+            return "PPS fix";
+        case 4:
+            return "RTK fix";
+        case 5:
+            return "RTK float";
+        default:
+            return "No fix";
+    }
+}
+
 static telemetry_t s_telemetry;
 
 void telemetry_init(void)
@@ -69,5 +92,23 @@ void telemetry_set_nav_status(const telemetry_nav_status_t *ns)
         return;
     }
     s_telemetry.nav_status = *ns;
+    xSemaphoreGive(telemetry_mutex);
+}
+
+void telemetry_set_wifi(const telemetry_wifi_t *wifi)
+{
+    if (!wifi || xSemaphoreTake(telemetry_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_telemetry.wifi = *wifi;
+    xSemaphoreGive(telemetry_mutex);
+}
+
+void telemetry_set_ntrip(const telemetry_ntrip_t *ntrip)
+{
+    if (!ntrip || xSemaphoreTake(telemetry_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_telemetry.ntrip = *ntrip;
     xSemaphoreGive(telemetry_mutex);
 }
